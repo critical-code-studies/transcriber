@@ -1245,7 +1245,9 @@ function renderSpeakerBar() {
   for (const x of doc.segs) if (x.spk) secs[x.spk] = (secs[x.spk] || 0) + (x.e - x.s);
   const total = Object.values(secs).reduce((a, b) => a + b, 0) || 1;
   bar.innerHTML = (S.spkStatus ? `<span>${esc(S.spkStatus)}</span>` : "") +
-    inUse.map((n) => `<span class="who"><i style="background:${spkColor(n)}"></i><input data-n="${n}" value="${esc(S.names[n] || "")}" placeholder="Speaker ${n}" aria-label="Name for speaker ${n}"><span>${Math.round(100 * secs[n] / total)}%</span></span>`).join("") +
+    inUse.map((n) => `<span class="who"><i style="background:${spkColor(n)}"></i><input data-n="${n}" value="${esc(S.names[n] || "")}" placeholder="Speaker ${n}" aria-label="Name for speaker ${n}"><span>${Math.round(100 * secs[n] / total)}%</span>` +
+      (reading() ? `<select data-v="${n}" aria-label="Reading voice for speaker ${n}"><option value="female" ${voiceFor(n) === "female" ? "selected" : ""}>female voice</option><option value="male" ${voiceFor(n) === "male" ? "selected" : ""}>male voice</option></select>` : "") +
+      `</span>`).join("") +
     ($("speakers").value !== "off" && !S.spkStatus ? `<button id="respk">${inUse.length ? "Identify speakers again" : "Identify speakers"}</button>` : "") +
     (doc.dirty ? `<span class="muted">Unsaved changes: use “Save corrections” below.</span>` : "");
   bar.querySelectorAll("input[data-n]").forEach((inp) => inp.addEventListener("change", () => {
@@ -1257,6 +1259,10 @@ function renderSpeakerBar() {
       if (x.spk === n) b.textContent = spkName(n);
     });
     renderSpeakerBar();
+  }));
+  bar.querySelectorAll("select[data-v]").forEach((sel) => sel.addEventListener("change", () => {
+    S.voices[+sel.dataset.v] = sel.value;
+    store.set("voices", JSON.stringify(S.voices));
   }));
   $("respk")?.addEventListener("click", () => {
     doc.segs.forEach((x) => { x.spkManual = false; });
@@ -1291,30 +1297,106 @@ async function saveDoc(auto) {
 // ---- playback
 
 function seekPlay(t) {
+  if (reading()) {
+    const i = S.doc ? Math.max(0, S.doc.segs.findIndex((x) => x.e > t)) : 0;
+    speakFrom(i);
+    return;
+  }
   const a = $("audio");
   a.currentTime = Math.max(0, t);
   a.play().catch(() => {});
+}
+
+// ---- read aloud: the transcript spoken by the browser's own voices, chosen as male or female
+
+const TTS = { on: false, i: 0 };
+const reading = () => $("psource").value === "speech";
+const FEMALE_VOICES = /female|samantha|karen|moira|tessa|fiona|victoria|allison|ava\b|susan|serena|kate|zoe|zira|martha|catherine|nicky|ellen|amelie|anna|alice|paulina|monica|sara|kyoko|melina|milena|nora|laura|veena|ioana|zuzana|luciana|joana|satu|yelda|kanya|flo|sandy|shelley|grandma|stephanie|hazel|susan|libby|sonia|jenny|aria|emma|olivia|natasha/i;
+const MALE_VOICES = /\bmale|daniel|alex\b|fred|tom\b|oliver|arthur|aaron|gordon|lee\b|rishi|david|mark\b|evan|nathan|thomas|jorge|diego|juan|luca|xander|yuri|maged|tarik|eddy|reed|rocko|grandpa|ralph|albert|bruce|junior|carlos|felipe|ryan|guy|george|brian|eric|andrew|christopher|william|liam/i;
+const NOVELTY_VOICES = /bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|albert|fred\b|junior|ralph|kathy|grandma|grandpa|eddy|flo\b|reed|rocko|sandy|shelley/i;
+S.voices = {};                // speaker number -> "female" | "male"
+
+function voiceGender(v) {
+  if (FEMALE_VOICES.test(v.name)) return "female";
+  if (MALE_VOICES.test(v.name)) return "male";
+  return null;
+}
+
+function pickVoice(gender) {
+  const lang = ($("language").value === "auto" ? "en" : $("language").value).toLowerCase();
+  const all = speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith(lang));
+  const pool = (all.length ? all : speechSynthesis.getVoices()).filter((v) => !NOVELTY_VOICES.test(v.name))
+    .sort((x, y) => (/premium|enhanced|natural/i.test(y.name) ? 1 : 0) - (/premium|enhanced|natural/i.test(x.name) ? 1 : 0));
+  return pool.find((v) => voiceGender(v) === gender) || pool[0] || null;
+}
+
+// Speaker 1 takes the chosen reading voice, Speaker 2 the other, and so on, unless set by hand.
+function voiceFor(n) {
+  if (n && S.voices[n]) return S.voices[n];
+  const base = $("pvoice").value, other = base === "female" ? "male" : "female";
+  return !n || n % 2 === 1 ? base : other;
+}
+
+function speakFrom(i) {
+  if (!S.doc || !("speechSynthesis" in window)) { toast("This browser can't read aloud."); return; }
+  $("audio").pause();
+  speechSynthesis.cancel();
+  TTS.on = true;
+  TTS.i = Math.max(0, Math.min(i, S.doc.segs.length - 1));
+  speakNext();
+}
+
+function speakNext() {
+  if (!TTS.on || !S.doc || TTS.i >= S.doc.segs.length) { TTS.on = false; updatePlayer(true); return; }
+  const x = S.doc.segs[TTS.i];
+  const u = new SpeechSynthesisUtterance(F.applyReplacements(x.t, F.parseReplacements($("replacements").value)));
+  u.voice = pickVoice(voiceFor(x.spk));
+  if (u.voice) u.lang = u.voice.lang;
+  u.rate = +$("prate").value;
+  u.volume = +$("pvol").value;
+  u.onstart = () => updatePlayer(true);
+  u.onend = () => { if (TTS.on) { TTS.i++; speakNext(); } };
+  u.onerror = () => { TTS.on = false; updatePlayer(true); };
+  speechSynthesis.speak(u);
+}
+
+function stopSpeaking() {
+  TTS.on = false;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+function togglePlay() {
+  if (reading()) {
+    if (TTS.on) { stopSpeaking(); updatePlayer(true); } else speakFrom(TTS.i || Math.max(0, nowLine));
+    return;
+  }
+  const a = $("audio");
+  if (a.paused) a.play().catch(() => {}); else a.pause();
 }
 
 let nowLine = -1;
 function updatePlayer(force) {
   const a = $("audio"), doc = S.doc;
   if (!doc) return;
-  const t = a.currentTime || 0, D = doc.duration || a.duration || 0;
-  $("playbtn").textContent = a.paused ? "▶" : "❚❚";
-  $("playbtn").setAttribute("aria-label", a.paused ? "Play" : "Pause");
-  $("ptime").textContent = `${clock(t, D)} / ${clock(D, D)}`;
+  const speech = reading();
+  const D = doc.duration || a.duration || 0;
+  const t = speech ? (doc.segs[TTS.i] ? doc.segs[TTS.i].s : 0) : a.currentTime || 0;
+  const playing = speech ? TTS.on : !a.paused;
+  $("playbtn").textContent = playing ? "❚❚" : "▶";
+  $("playbtn").setAttribute("aria-label", playing ? "Pause" : "Play");
+  $("ptime").textContent = speech ? `Line ${TTS.i + 1} of ${doc.segs.length}` : `${clock(t, D)} / ${clock(D, D)}`;
   drawScrub(t, D);
-  // highlight the line being played
+  // highlight the line being played or read
   let lo = 0, hi = doc.segs.length - 1, at = -1;
-  while (lo <= hi) { const mid = (lo + hi) >> 1; if (doc.segs[mid].s <= t + 0.05) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+  if (speech) at = TTS.on || TTS.i ? TTS.i : -1;
+  else while (lo <= hi) { const mid = (lo + hi) >> 1; if (doc.segs[mid].s <= t + 0.05) { at = mid; lo = mid + 1; } else hi = mid - 1; }
   if (at !== nowLine || force) {
     const host = $("doclines");
     host.querySelector(".dl.now")?.classList.remove("now");
     const el = host.querySelector(`.dl[data-i="${at}"]`);
     if (el) {
       el.classList.add("now");
-      if (!a.paused && !host.contains(document.activeElement)) {
+      if (playing && !host.contains(document.activeElement)) {
         const top = el.offsetTop - host.offsetTop;
         if (top < host.scrollTop || top > host.scrollTop + host.clientHeight - 60) host.scrollTo({ top: top - 40, behavior: "smooth" });
       }
@@ -2106,8 +2188,7 @@ function onKey(e) {
   }
   if (!typing && e.key === " " && S.doc && S.doc.mode === S.mode && !$("summary").classList.contains("hidden")) {
     e.preventDefault();
-    const a = $("audio");
-    if (a.paused) a.play().catch(() => {}); else a.pause();
+    togglePlay();
     return;
   }
   if (!typing && S.mode === "live" && /^[1-9]$/.test(e.key) && ["recording", "paused"].includes(S.live.state)) {
@@ -2141,9 +2222,21 @@ async function init() {
   $("rewrite").addEventListener("click", rewrite);
   const audio = $("audio");
   ["timeupdate", "play", "pause", "loadedmetadata", "seeked"].forEach((ev) => audio.addEventListener(ev, () => updatePlayer()));
-  $("playbtn").addEventListener("click", () => { if (audio.paused) audio.play().catch(() => {}); else audio.pause(); });
-  $("back5").addEventListener("click", () => { audio.currentTime = Math.max(0, audio.currentTime - 5); });
-  $("fwd5").addEventListener("click", () => { audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5); });
+  $("playbtn").addEventListener("click", togglePlay);
+  $("psource").value = store.get("psource") || "audio";
+  $("pvoice").value = store.get("pvoice") || "female";
+  try { S.voices = JSON.parse(store.get("voices") || "{}"); } catch (e) { S.voices = {}; }
+  const sourceUi = () => { $("pvoice").classList.toggle("hidden", !reading()); renderSpeakerBar(); updatePlayer(true); };
+  $("psource").addEventListener("change", () => {
+    store.set("psource", $("psource").value);
+    if (reading()) audio.pause(); else stopSpeaking();
+    sourceUi();
+  });
+  $("pvoice").addEventListener("change", () => { store.set("pvoice", $("pvoice").value); renderSpeakerBar(); });
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => {};   // loads the voice list
+  sourceUi();
+  $("back5").addEventListener("click", () => { if (reading()) speakFrom(TTS.i - 1); else audio.currentTime = Math.max(0, audio.currentTime - 5); });
+  $("fwd5").addEventListener("click", () => { if (reading()) speakFrom(TTS.i + 1); else audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5); });
   $("prate").addEventListener("change", () => { audio.playbackRate = +$("prate").value; });
   const vol = store.get("volume");
   $("pvol").value = vol !== null ? vol : "0.5";               // playback starts at half volume

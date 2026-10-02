@@ -19,7 +19,9 @@ After the main pass, Transcriber compares the recognised text with the audio lev
 
 The summary gives totals (words, pace, audible share, silences), where the processing time went, and a timeline with lanes for the waveform, silences, per-segment confidence, speakers, re-transcribed passages and speaking rate. **Words to check** lists the words the model was least sure of, with their times. **Possible names** lists capitalised words mid-sentence. Clicking either adds the word to *Find and replace*.
 
-The **Transcript** panel plays the recording: click a time, the waveform or a timeline lane to play from there, and the current line is highlighted as it plays. Lines can be corrected in place, speakers renamed or reassigned, and **Save corrections** rewrites the files without transcribing again.
+The **Transcript** panel plays the recording: click a time, the waveform or a timeline lane to play from there, and the current line is highlighted as it plays. Lines can be corrected in place, speakers renamed or reassigned, and **Save corrections** rewrites the files without transcribing again. Playback starts at half volume, with a volume control and speeds from 0.75× to 2×.
+
+Set the player to **Read aloud** to hear the transcript spoken by the browser's own voices, with a male or female voice. Each speaker can be given a different voice (Speaker 1 takes the chosen voice and Speaker 2 the other, unless set by hand), which helps when checking corrections and attributions by ear.
 
 ## LIVE mode
 

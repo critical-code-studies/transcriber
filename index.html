@@ -313,6 +313,7 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .ptime { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); min-width: 92px; }
 .player canvas { flex: 1; min-width: 160px; height: 36px; border-radius: 6px; cursor: pointer; background: var(--surface); }
 .player select { width: auto; padding: 5px 8px; font-size: 13px; }
+.spkbar .who select { width: auto; padding: 1px 4px; font-size: 12px; margin-right: 4px; }
 .player .vol { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 .player .vol input { width: 80px; accent-color: var(--accent); }
 .spkbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 8px; font-size: 13px; color: var(--text-2); }
@@ -553,6 +554,8 @@ footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
         <button id="fwd5" title="Forward 5 seconds">+5 s</button>
         <span id="ptime" class="ptime">0:00 / 0:00</span>
         <canvas id="scrub" aria-label="Playback position; click to jump"></canvas>
+        <select id="psource" aria-label="What to play"><option value="audio">Recording</option><option value="speech">Read aloud</option></select>
+        <select id="pvoice" class="hidden" aria-label="Reading voice"><option value="female">Female voice</option><option value="male">Male voice</option></select>
         <label class="vol" title="Volume">🔈<input type="range" id="pvol" min="0" max="1" step="0.05" value="0.5" aria-label="Volume"></label>
         <select id="prate" aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
       </div>
