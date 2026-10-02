@@ -117,7 +117,6 @@ function setMode(mode) {
   document.body.classList.toggle("mode-live", mode === "live");
   $("tab-file").setAttribute("aria-selected", mode === "file");
   $("tab-live").setAttribute("aria-selected", mode === "live");
-  store.set("mode", mode);
   renderModels();
   if (mode === "live") liveDefaults();
   else if (S.file) applyFileDefaults(S.file);
@@ -2516,7 +2515,7 @@ async function init() {
     $("termshint").textContent = "proper nouns and jargon; the browser engine can't take a prompt, so use these with Find and replace, or use the Mac app.";
   }
 
-  setMode(["file", "live"].includes(params.get("mode")) ? params.get("mode") : (store.get("mode") || "file"));
+  setMode(params.get("mode") === "live" ? "live" : "file");   // always opens in FILE unless asked for LIVE
   offerDraft();
 
   if (isMac) {
