@@ -1133,7 +1133,8 @@ async function identifySpeakers() {
         else if (m.total) status(`Identifying speakers: downloading the voice model, ${Math.round((m.loaded || 0) / 1e6)} of ${Math.round(m.total / 1e6)} MB…`);
       });
       doc.segs.forEach((x, i) => { if (fresh[i]) x.vec = fresh[i]; });
-      const labels = stableLabels(clusterSpeakers(doc.segs.map((x) => x.vec || null), setting === "auto" ? 0 : +setting),
+      // lines under 1.5 s give unreliable voice samples: they take a neighbour's speaker instead
+      const labels = stableLabels(clusterSpeakers(doc.segs.map((x) => (x.e - x.s >= 1.5 && x.vec) || null), setting === "auto" ? 0 : +setting),
                                   doc.segs.map((x) => x.spk));
       doc.segs.forEach((x, i) => { if (!x.spkManual) x.spk = labels[i]; });
     }

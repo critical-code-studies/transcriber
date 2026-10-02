@@ -15,7 +15,7 @@ While it runs, the progress panel shows each stage with its timing, a waveform t
 
 After the main pass, Transcriber compares the recognised text with the audio levels it has measured. Any stretch of 4 seconds or more with clear sound but no text, which Whisper sometimes skips after a pause, is transcribed again on its own and merged in, and the Markdown notes where this happened.
 
-<p align="center"><img src="branding/screenshot-summary.png" alt="Summary: totals, timeline lanes for waveform, silence, confidence and speakers, and lists of words to check" width="88%"></p>
+<p align="center"><img src="branding/screenshot-summary.png" alt="Summary: totals, where the time went, the transcript panel with named speakers and the audio player, and timeline lanes for waveform, silence, confidence, re-transcribed passages and speakers" width="88%"></p>
 
 The summary gives totals (words, pace, audible share, silences), where the processing time went, and a timeline with lanes for the waveform, silences, per-segment confidence, speakers, re-transcribed passages and speaking rate. **Words to check** lists the words the model was least sure of, with their times. **Possible names** lists capitalised words mid-sentence. Clicking either adds the word to *Find and replace*.
 
@@ -31,7 +31,7 @@ Press **Start recording** (⌘R) and allow the microphone. Text appears a few se
 - Press **1–9** (outside a text field), click a tag, or type one and press Return to mark the current moment. When not recording, click a tag button to rename it (for example to a speaker's name); right-click it to switch between heading and marker, remove it, or add another. Tags become headings in the Markdown; a tag starting with `*` becomes an inline marker instead.
 - **Stop and save** (⌘S) writes the .md, .srt and .txt and, if chosen, the audio as .wav. In the Mac app, committed lines and tags are also kept in the browser while recording, so a closed tab can be recovered as text; the web version does not keep them.
 
-<p align="center"><img src="branding/screenshot-live.png" alt="Live transcription with tags, a corrected line and provisional text" width="88%"></p>
+<p align="center"><img src="branding/screenshot-live.png" alt="Live transcription with speaker labels, tags, a corrected line and provisional text" width="88%"></p>
 
 ## Speakers
 
