@@ -4,212 +4,390 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Transcriber</title>
+<meta name="description" content="Transcribe recordings or live speech with Whisper, on your Mac or in the browser. Markdown, SRT and plain-text output.">
+<link rel="icon" href="branding/mark.svg" type="image/svg+xml">
 <style>
 :root {
   color-scheme: light;
-  --bg: #f4f3ef;
+  --bg: #f3f2ee;
   --surface: #fcfcfb;
   --surface-2: #f0efec;
   --border: #e2e0da;
   --text: #0b0b0b;
   --text-2: #52514e;
-  --text-3: #8a8883;
+  --text-3: #85837d;
   --accent: #2a78d6;
-  --accent-soft: #cde2fb;
-  --accent-ink: #ffffff;
-  --wave-idle: #cfcdc6;
-  --wave-done: #6da7ec;
-  --speech: #2a78d6;
+  --accent-soft: #dbe9fb;
   --good: #0ca30c;
+  --warning: #fab219;
   --critical: #d03b3b;
-  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  --shadow: 0 1px 2px rgba(10,14,30,.05), 0 8px 24px rgba(10,14,30,.06);
+  --glow: radial-gradient(1200px 380px at 50% -120px, rgba(79,155,255,.16), transparent 70%);
+  --ink-1: #0c1020;
+  --ink-2: #1d2645;
+  --brand-blue: #4f9bff;
+  --brand-teal: #2fd3bd;
+  --s-bg: #0e1324;
+  --s-bg-2: #151c33;
+  --s-line: #27304d;
+  --s-text: #e9eefb;
+  --s-text-2: #a9b3cf;
+  --s-text-3: #6f7a99;
+  --s-remaining: #2c3654;
+  --rec: #ff4d5e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #121211;
-    --surface: #1a1a19;
-    --surface-2: #232321;
-    --border: #33332f;
-    --text: #ffffff;
-    --text-2: #c3c2b7;
-    --text-3: #8d8c84;
-    --accent: #3987e5;
-    --accent-soft: #184f95;
-    --wave-idle: #45443f;
-    --wave-done: #5598e7;
-    --speech: #3987e5;
-    --shadow: none;
+    --bg: #0f1116; --surface: #171a21; --surface-2: #1f232c; --border: #2c313c;
+    --text: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
+    --accent: #3987e5; --accent-soft: #17345e; --shadow: none;
+    --glow: radial-gradient(1200px 380px at 50% -120px, rgba(79,155,255,.12), transparent 70%);
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+  --bg: #0f1116; --surface: #171a21; --surface-2: #1f232c; --border: #2c313c;
   --text: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
-  --accent: #3987e5; --accent-soft: #184f95; --wave-idle: #45443f; --wave-done: #5598e7;
-  --speech: #3987e5; --shadow: none;
+  --accent: #3987e5; --accent-soft: #17345e; --shadow: none;
+  --glow: radial-gradient(1200px 380px at 50% -120px, rgba(79,155,255,.12), transparent 70%);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body {
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  padding: 28px 16px 60px;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
+  background-image: var(--glow); background-repeat: no-repeat; min-height: 100vh;
 }
-main { max-width: 920px; margin: 0 auto; display: grid; gap: 18px; }
-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; }
-h1 { font-size: 24px; letter-spacing: -.01em; margin: 0; }
-header .sub { color: var(--text-3); font-size: 13px; }
-h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
-     color: var(--text-2); margin: 0 0 12px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
-        padding: 20px; box-shadow: var(--shadow); min-width: 0; }
 .hidden { display: none !important; }
+body.mode-file .live-only, body.mode-live .file-only, body.engine-web .mac-only, body.engine-mac .web-only { display: none !important; }
 .muted { color: var(--text-3); }
 .small { font-size: 13px; }
+a { color: var(--accent); }
 
-/* drop zone */
-#drop { border: 2px dashed var(--border); border-radius: 12px; padding: 30px 18px; text-align: center;
-        cursor: pointer; transition: border-color .15s, background .15s; }
-#drop:hover, #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-#drop .big { font-size: 17px; font-weight: 500; }
-#drop svg { width: 34px; height: 34px; color: var(--accent); margin-bottom: 6px; }
+/* ---------------- app bar, menus, mode switch */
+.appbar {
+  position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 16px; padding: 0 16px; height: 50px;
+  background: linear-gradient(100deg, var(--ink-1), var(--ink-2)); color: var(--s-text);
+  box-shadow: 0 1px 0 rgba(255,255,255,.04), 0 6px 20px rgba(5,8,20,.25);
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 650; letter-spacing: -.01em; font-size: 16px; white-space: nowrap; }
+.brand img { width: 26px; height: 26px; border-radius: 7px; box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+.menubar { display: flex; gap: 2px; }
+.menubar > div { position: relative; }
+.menubar .top { background: none; border: 0; color: var(--s-text-2); font: inherit; font-size: 13.5px; padding: 5px 10px; border-radius: 6px; cursor: default; }
+.menubar .top:hover, .menubar .top[aria-expanded="true"] { background: rgba(255,255,255,.09); color: var(--s-text); }
+.menu { position: absolute; top: calc(100% + 7px); left: 0; min-width: 270px; padding: 5px; z-index: 60;
+        background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px rgba(5,8,20,.28); }
+.menu button { display: flex; width: 100%; align-items: center; gap: 10px; background: none; border: 0; text-align: left;
+               font: inherit; font-size: 13.5px; color: var(--text); padding: 6px 10px 6px 26px; border-radius: 6px; cursor: default; position: relative; }
+.menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--accent); color: #fff; outline: none; }
+.menu button:hover:not(:disabled) kbd, .menu button:focus-visible kbd { color: rgba(255,255,255,.85); }
+.menu button:disabled { color: var(--text-3); }
+.menu button[aria-checked="true"]::before { content: "✓"; position: absolute; left: 9px; }
+.menu kbd { margin-left: auto; font: inherit; font-size: 12.5px; color: var(--text-3); }
+.menu hr { border: 0; border-top: 1px solid var(--border); margin: 5px 6px; }
+.modes { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: rgba(255,255,255,.07); }
+.modes button { background: none; border: 0; color: var(--s-text-2); font: inherit; font-size: 12.5px; font-weight: 650; letter-spacing: .08em;
+                padding: 4px 14px; border-radius: 7px; cursor: pointer; }
+.modes button[aria-selected="true"] { background: linear-gradient(100deg, var(--brand-blue), var(--brand-teal)); color: #06101f; }
+.modes button .rd { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--rec); margin-right: 6px; vertical-align: 1px; }
+.engine { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--s-text-2); white-space: nowrap; }
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: 99px; background: rgba(255,255,255,.07); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-teal); box-shadow: 0 0 8px var(--brand-teal); }
+.pill.web .dot { background: var(--brand-blue); box-shadow: 0 0 8px var(--brand-blue); }
+.engine button.switch { background: linear-gradient(100deg, var(--brand-blue), var(--brand-teal)); color: #06101f; border: 0;
+                        font-weight: 650; font-size: 12.5px; padding: 4px 11px; border-radius: 99px; cursor: pointer; }
+
+main { max-width: 1000px; margin: 0 auto; padding: 26px 16px 70px; display: grid; gap: 18px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; box-shadow: var(--shadow); min-width: 0; }
+h2 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; color: var(--text-2); margin: 0 0 14px; }
+h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-2); font-weight: 600; }
+
+/* ---------------- drop zone */
+#drop { position: relative; border-radius: 14px; padding: 34px 18px 30px; text-align: center; cursor: pointer; overflow: hidden;
+        background: linear-gradient(var(--surface), var(--surface)) padding-box,
+                    linear-gradient(120deg, color-mix(in srgb, var(--brand-blue) 55%, var(--border)), color-mix(in srgb, var(--brand-teal) 55%, var(--border))) border-box;
+        border: 1.5px dashed transparent; transition: transform .15s; }
+#drop:hover, #drop.over { transform: translateY(-1px); }
+#drop.over { background: linear-gradient(color-mix(in srgb, var(--brand-blue) 7%, var(--surface)), color-mix(in srgb, var(--brand-blue) 7%, var(--surface))) padding-box,
+                         linear-gradient(120deg, var(--brand-blue), var(--brand-teal)) border-box; border-style: solid; }
+.bars { display: flex; justify-content: center; align-items: center; gap: 4px; height: 46px; margin-bottom: 10px; }
+.bars i { width: 5px; border-radius: 3px; background: linear-gradient(var(--brand-blue), var(--brand-teal)); animation: bounce 1.6s ease-in-out infinite; }
+@keyframes bounce { 0%,100% { height: 20%; } 50% { height: 100%; } }
+#drop .big { font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
 #fileinfo { display: flex; gap: 14px; align-items: center; }
-#fileinfo .icon { width: 44px; height: 44px; border-radius: 10px; background: var(--accent-soft);
-                  display: grid; place-items: center; color: var(--accent); flex: none; }
-#fileinfo .icon svg { width: 22px; height: 22px; }
+#fileinfo .icon { width: 46px; height: 46px; border-radius: 12px; flex: none; background: linear-gradient(140deg, var(--ink-2), var(--ink-1)); display: grid; place-items: center; }
+#fileinfo .icon img { width: 30px; }
 #fileinfo .meta { min-width: 0; flex: 1; }
 #fileinfo .name { font-weight: 600; overflow-wrap: anywhere; }
 #fileinfo .path { color: var(--text-3); font-size: 13px; overflow-wrap: anywhere; }
 .pathrow { display: flex; gap: 8px; margin-top: 12px; }
 .pathrow input { flex: 1; min-width: 0; }
 
-/* form */
+/* ---------------- form */
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
 .full { grid-column: 1 / -1; }
-label.f { display: grid; gap: 5px; font-size: 13px; color: var(--text-2); font-weight: 500; min-width: 0; }
-label.f .hint { font-weight: 400; color: var(--text-3); }
+.f { display: grid; gap: 5px; font-size: 13px; color: var(--text-2); font-weight: 500; min-width: 0; align-content: start; }
+.f .hint { font-weight: 400; color: var(--text-3); }
 input[type=text], select, textarea {
   font: inherit; font-size: 14px; color: var(--text); background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; width: 100%; min-width: 0;
+  border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; width: 100%; min-width: 0;
 }
-textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+textarea:disabled { opacity: .55; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .inline { display: flex; gap: 8px; }
 .inline input { flex: 1; }
-.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border);
-       border-radius: 9px; padding: 3px; gap: 3px; }
-.seg label { padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-2); }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg label { padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text-2); }
+.seg label small { color: var(--text-3); margin-left: 4px; font-weight: 400; }
 .seg input { display: none; }
-.seg label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
+.seg label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.14); font-weight: 600; }
 details summary { cursor: pointer; color: var(--text-2); font-size: 13px; font-weight: 500; }
 details[open] summary { margin-bottom: 10px; }
-
-button { font: inherit; font-size: 14px; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+button { font: inherit; font-size: 14px; border-radius: 9px; padding: 8px 14px; cursor: pointer;
          border: 1px solid var(--border); background: var(--surface-2); color: var(--text); white-space: nowrap; }
-button:hover { border-color: var(--text-3); }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
-                 font-weight: 600; padding: 11px 22px; font-size: 15px; }
-button.primary:disabled { opacity: .45; cursor: not-allowed; }
+button:hover:not(:disabled) { border-color: var(--text-3); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: linear-gradient(100deg, #2a78d6, #1f9e9a); color: #fff; border: 0; font-weight: 650; padding: 11px 24px; font-size: 15px;
+                 box-shadow: 0 6px 18px rgba(42,120,214,.28); }
+button.primary:disabled { box-shadow: none; }
 button.link { background: none; border: none; color: var(--text-3); padding: 0; font-size: 13px; text-decoration: underline; }
-.actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.check { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13px; }
 
-/* progress */
-.steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
-.step { font-size: 12px; padding: 4px 10px 4px 8px; border-radius: 99px; background: var(--surface-2);
-        color: var(--text-3); display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); }
-.step .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--wave-idle); }
-.step.active { color: var(--text); border-color: var(--accent); }
-.step.active .dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
-.step.done { color: var(--text-2); }
-.step.done .dot { background: var(--good); }
-@keyframes pulse { 50% { transform: scale(1.6); opacity: .5; } }
-.bar { height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin-bottom: 16px; }
-.bar > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .4s ease; width: 0; }
-.bar.indeterminate > div { width: 30% !important; animation: slide 1.3s ease-in-out infinite; }
-@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
-
-.wavewrap { position: relative; }
-#wave { width: 100%; height: 150px; display: block; border-radius: 8px; background: var(--surface-2); cursor: crosshair; }
-.axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3);
-        font-variant-numeric: tabular-nums; margin-top: 4px; }
-.legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-2); margin-top: 6px; flex-wrap: wrap; }
+/* ---------------- studio panels (always dark) */
+.studio { background: radial-gradient(900px 300px at 15% -60px, rgba(79,155,255,.14), transparent 60%), linear-gradient(var(--s-bg-2), var(--s-bg));
+          color: var(--s-text); border: 1px solid #222b47; border-radius: 18px; padding: 22px; box-shadow: 0 18px 50px rgba(5,8,20,.28); min-width: 0; }
+.studio h2 { color: var(--s-text-2); }
+.studio h3 { color: var(--s-text-2); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.studio button { background: rgba(255,255,255,.06); color: var(--s-text); border-color: var(--s-line); }
+.studio button:hover:not(:disabled) { border-color: var(--s-text-3); }
+.studio input[type=text] { background: rgba(255,255,255,.05); border-color: var(--s-line); color: var(--s-text); }
+.studio-top { display: grid; grid-template-columns: 150px 1fr; gap: 22px; align-items: center; }
+.ring { position: relative; width: 150px; height: 150px; }
+.ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring .track { stroke: var(--s-line); }
+.ring .arc { transition: stroke-dashoffset .5s ease; filter: drop-shadow(0 0 6px rgba(47,211,189,.45)); }
+.ring .c { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.ring .pct { font-size: 34px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.ring .pct small { font-size: 16px; color: var(--s-text-2); }
+.ring .lbl { font-size: 11.5px; color: var(--s-text-2); margin-top: 6px; max-width: 110px; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.stage { font-size: 12px; padding: 4px 10px 4px 8px; border-radius: 99px; background: rgba(255,255,255,.04); color: var(--s-text-3);
+         display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--s-line); font-variant-numeric: tabular-nums; }
+.stage .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--s-line); }
+.stage.active { color: var(--s-text); border-color: var(--brand-blue); }
+.stage.active .dot { background: var(--brand-blue); animation: pulse 1.2s ease-in-out infinite; box-shadow: 0 0 8px var(--brand-blue); }
+.stage.done { color: var(--s-text-2); }
+.stage.done .dot { background: var(--brand-teal); }
+.stage em { font-style: normal; color: var(--s-text-3); }
+@keyframes pulse { 50% { transform: scale(1.5); opacity: .55; } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+.tile { background: rgba(255,255,255,.035); border: 1px solid var(--s-line); border-radius: 11px; padding: 8px 11px; min-width: 0; }
+.tile .k { font-size: 11.5px; color: var(--s-text-3); }
+.tile .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .v small { font-size: 12px; font-weight: 500; color: var(--s-text-2); }
+.wavewrap { position: relative; margin-top: 20px; }
+canvas.wave { width: 100%; height: 170px; display: block; border-radius: 12px; background: rgba(0,0,0,.22); cursor: crosshair; }
+.axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--s-text-3); font-variant-numeric: tabular-nums; margin-top: 5px; }
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--s-text-2); margin-top: 6px; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
-.tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px;
-       padding: 6px 9px; border-radius: 7px; max-width: 320px; z-index: 5; line-height: 1.4; box-shadow: var(--shadow); }
+.tip { position: absolute; pointer-events: none; background: #fff; color: #0b0b0b; font-size: 12px; padding: 6px 9px; border-radius: 8px;
+       max-width: 340px; z-index: 5; line-height: 1.4; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
 .tip b { font-variant-numeric: tabular-nums; }
-
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; margin-top: 16px; }
-.tile { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
-.tile .k { font-size: 12px; color: var(--text-3); }
-.tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
-           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tile .v small { font-size: 13px; font-weight: 500; color: var(--text-2); }
-
-#live { margin-top: 16px; height: 190px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 10px;
-        scroll-behavior: smooth; }
-#live p { margin: 0 0 6px; font-size: 14px; color: var(--text-2); animation: fadein .5s ease; }
-#live p:last-child { color: var(--text); }
-#live time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--accent); margin-right: 8px; font-weight: 600; }
+.minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.mini { background: rgba(255,255,255,.03); border: 1px solid var(--s-line); border-radius: 12px; padding: 12px 14px; min-width: 0; position: relative; }
+.mini .now { float: right; font-size: 12px; color: var(--s-text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.mini svg { display: block; width: 100%; height: 90px; overflow: visible; }
+.mini svg text { fill: var(--s-text-3); font-size: 10px; }
+.terms { display: grid; gap: 5px; }
+.term { display: grid; grid-template-columns: 92px 1fr 26px; gap: 8px; align-items: center; font-size: 12.5px; }
+.term span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--s-text); }
+.term .b { height: 8px; border-radius: 0 4px 4px 0; background: linear-gradient(90deg, var(--brand-blue), var(--brand-teal)); transition: width .6s ease; min-width: 2px; }
+.term span:last-child { text-align: right; color: var(--s-text-3); font-variant-numeric: tabular-nums; }
+#live { margin-top: 16px; height: 170px; overflow-y: auto; border-top: 1px solid var(--s-line); padding-top: 12px;
+        mask-image: linear-gradient(transparent, #000 30px); }
+#live p { margin: 0 0 7px; font-size: 14px; color: var(--s-text-2); animation: fadein .5s ease; }
+#live p.cur { color: var(--s-text); }
+.caret::after { content: ""; display: inline-block; width: 2px; height: 1em; background: var(--brand-teal); margin-left: 3px; vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+#live time, .ledit time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--brand-teal); margin-right: 9px; font-weight: 600; }
 @keyframes fadein { from { opacity: 0; transform: translateY(6px); } }
+@keyframes blink { 50% { opacity: 0; } }
+.banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; margin-bottom: 16px; }
+.banner.ok { background: rgba(12,163,12,.14); }
+.banner.err { background: rgba(208,59,59,.16); }
+.banner svg { width: 20px; height: 20px; flex: none; margin-top: 1px; }
+.banner.ok svg { color: #3fd13f; }
+.banner.err svg { color: #ff7070; }
+.banner pre { font-size: 11px; max-height: 200px; overflow: auto; background: rgba(0,0,0,.3); padding: 10px; border-radius: 8px; white-space: pre-wrap; }
 
-.chart { position: relative; margin-top: 8px; }
-.chart svg { display: block; width: 100%; height: 130px; overflow: visible; }
-.chart .grid line { stroke: var(--border); stroke-width: 1; }
-.chart .grid text, .chart .xaxis text { fill: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
-.chart rect.b { fill: var(--accent); }
-.chart rect.b.hl { fill: var(--wave-done); }
-.chart rect.hit { fill: transparent; }
+/* ---------------- live */
+.live-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.studio button.rec { display: inline-flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; padding: 11px 20px; border-radius: 99px;
+                     background: rgba(255,77,94,.14); border: 1px solid rgba(255,77,94,.55); color: #fff; }
+.rec .rd { width: 12px; height: 12px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 10px var(--rec); }
+.rec.on .rd { animation: pulse 1.1s ease-in-out infinite; }
+.rec.paused .rd { border-radius: 2px; background: #ffb4bc; box-shadow: none; }
+.ltimer { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.meter { flex: 1; min-width: 160px; }
+.meter canvas { width: 100%; height: 22px; display: block; border-radius: 6px; background: rgba(0,0,0,.25); }
+.lstatus { font-size: 12.5px; color: var(--s-text-2); width: 100%; }
+.lstatus b { color: var(--s-text); font-weight: 600; }
+canvas.scope { height: 120px; margin-top: 16px; }
+.tagbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; }
+.studio .tagbar button { font-size: 13px; padding: 5px 11px; border-radius: 99px; }
+.tagbar button kbd { font: inherit; font-size: 11px; color: var(--s-text-3); margin-right: 6px; border: 1px solid var(--s-line); border-radius: 4px; padding: 0 4px; }
+.tagbar button.marker { border-style: dashed; }
+.tagbar input { flex: 1; min-width: 220px; font-size: 13px !important; padding: 6px 10px !important; }
+.ledit { margin-top: 14px; min-height: 220px; max-height: 420px; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--s-line); padding-top: 12px; }
+.ledit .empty { color: var(--s-text-3); font-size: 14px; }
+.lseg { margin: 0 0 6px; font-size: 15px; line-height: 1.55; display: flex; gap: 0; }
+.lseg time { flex: none; width: 62px; }
+.lseg span[contenteditable] { flex: 1; min-width: 0; outline: none; border-radius: 5px; padding: 0 4px; color: var(--s-text); }
+.lseg span[contenteditable]:hover { background: rgba(255,255,255,.04); }
+.lseg span[contenteditable]:focus { background: rgba(79,155,255,.12); box-shadow: 0 0 0 1px rgba(79,155,255,.5); }
+.lseg.edited time::after { content: "✎"; margin-left: 4px; color: var(--s-text-3); }
+.lseg u { text-decoration: underline dotted #fab219; text-underline-offset: 3px; }
+.lseg.interim span { color: var(--s-text-3); font-style: italic; }
+.ltag { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; }
+.ltag .t { font-size: 13px; font-weight: 650; padding: 2px 10px; border-radius: 99px; background: linear-gradient(100deg, rgba(79,155,255,.25), rgba(47,211,189,.25)); border: 1px solid rgba(79,155,255,.45); }
+.ltag.marker .t { background: rgba(250,178,25,.16); border-color: rgba(250,178,25,.5); }
+.ltag time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--s-text-3); }
+.studio .ltag button { background: none; border: 0; color: var(--s-text-3); padding: 0 4px; font-size: 14px; }
 
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 20px; }
-h3 { font-size: 13px; margin: 0 0 8px; color: var(--text-2); font-weight: 600; }
+/* ---------------- summary */
+.hero { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.hero div { padding: 14px; border-radius: 12px; background: var(--surface-2); min-width: 0; }
+.hero .k { font-size: 12px; color: var(--text-3); }
+.hero .v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hero .v small { font-size: 13px; font-weight: 500; color: var(--text-2); letter-spacing: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; margin-top: 14px; font-size: 13px; }
+.stats div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--border); padding: 5px 0; }
+.stats span { color: var(--text-3); }
+.stats b { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.section { margin-top: 26px; }
+.timebar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 2px; }
+.timebar div { min-width: 3px; }
+.keyrow { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--text-2); margin-top: 8px; }
+.keyrow i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.keyrow b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.laneswrap { position: relative; }
+.lanes { display: grid; grid-template-columns: 112px 1fr; gap: 6px 12px; align-items: center; }
+.lanes .ln { font-size: 12px; color: var(--text-3); text-align: right; }
+.lanes canvas { width: 100%; display: block; border-radius: 6px; background: var(--surface-2); cursor: crosshair; }
+.laneswrap .tip { background: var(--text); color: var(--bg); }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); }
-.chip span { color: var(--text-3); font-variant-numeric: tabular-nums; margin-left: 4px; font-size: 12px; }
+.chip { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+.chip span { color: var(--text-3); font-variant-numeric: tabular-nums; margin-left: 5px; font-size: 12px; }
 button.chip { cursor: pointer; }
 button.chip:hover { border-color: var(--accent); }
+.chip.warn { border-color: color-mix(in srgb, var(--warning) 65%, var(--border)); }
+.hbars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 32px; }
+.hbar { display: grid; grid-template-columns: 110px 1fr 34px; gap: 10px; align-items: center; font-size: 13px; }
+.hbar span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar .b { height: 10px; border-radius: 0 4px 4px 0; background: var(--accent); }
+.hbar span:last-child { text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: 140px; overflow: visible; }
+.chart .grid line { stroke: var(--border); }
+.chart text { fill: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart .tip { background: var(--text); color: var(--bg); }
+.mini .tip { background: #fff; color: #0b0b0b; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
-td, th { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+td, th { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); }
 th { color: var(--text-3); font-weight: 500; }
 td.n { text-align: right; font-variant-numeric: tabular-nums; }
-
-.files { display: grid; gap: 8px; margin-top: 20px; }
-.file { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface-2); border-radius: 9px; }
-.file .ext { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px;
-             padding: 2px 6px; text-transform: uppercase; }
+.files { display: grid; gap: 8px; }
+.file { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface-2); border-radius: 10px; }
+.file .ext { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; text-transform: uppercase; }
 .file .p { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
 .file button { padding: 4px 10px; font-size: 13px; }
 
-.banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; }
-.banner.ok { background: color-mix(in srgb, var(--good) 12%, transparent); }
-.banner.err { background: color-mix(in srgb, var(--critical) 12%, transparent); }
-.banner svg { width: 20px; height: 20px; flex: none; margin-top: 1px; }
-.banner.ok svg { color: var(--good); }
-.banner.err svg { color: var(--critical); }
-pre.log { font-size: 11px; max-height: 200px; overflow: auto; background: var(--surface-2); padding: 10px; border-radius: 8px; white-space: pre-wrap; }
-footer { text-align: center; }
+/* ---------------- transcript panel and player */
+.player { display: flex; align-items: center; gap: 8px; padding: 10px; border-radius: 12px; background: var(--surface-2); flex-wrap: wrap; }
+.player button { padding: 6px 10px; font-size: 13px; background: var(--surface); }
+.player button.play { width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 15px; color: #fff; border: 0;
+                      background: linear-gradient(120deg, #2a78d6, #1f9e9a); box-shadow: 0 4px 12px rgba(42,120,214,.3); }
+.ptime { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); min-width: 92px; }
+.player canvas { flex: 1; min-width: 160px; height: 36px; border-radius: 6px; cursor: pointer; background: var(--surface); }
+.player select { width: auto; padding: 5px 8px; font-size: 13px; }
+.player .vol { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.player .vol input { width: 80px; accent-color: var(--accent); }
+.spkbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 8px; font-size: 13px; color: var(--text-2); }
+.spkbar .who { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); }
+.spkbar .who i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.spkbar .who input { width: 110px; padding: 2px 6px; font-size: 13px; background: var(--surface); border-radius: 6px; }
+.spkbar .who span { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; margin-right: 6px; }
+.doc { max-height: 460px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border); border-radius: 12px; padding: 8px 6px; }
+.dl { display: flex; gap: 8px; align-items: baseline; margin: 0; padding: 4px 6px; border-radius: 8px; font-size: 14.5px; line-height: 1.55; }
+.dl.now { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.dl .ts { flex: none; width: 54px; background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; }
+.spk { flex: none; font-size: 11.5px; font-weight: 650; padding: 1px 8px; border-radius: 99px; cursor: pointer; border: 1px solid transparent; color: #fff; background: var(--c, #85837d); white-space: nowrap; }
+.spk.none { background: transparent; color: var(--text-3); border-color: var(--border); }
+.dl span[contenteditable] { flex: 1; min-width: 0; outline: none; border-radius: 5px; padding: 0 4px; }
+.dl span[contenteditable]:focus { background: var(--surface-2); box-shadow: 0 0 0 1px var(--accent); }
+.dl.edited .ts::after { content: " ✎"; color: var(--text-3); }
+.lseg .spk { margin-right: 8px; align-self: baseline; }
 
-@media (max-width: 640px) {
-  .grid, .cols { grid-template-columns: 1fr; }
-  #wave { height: 120px; }
+/* ---------------- dialogs */
+dialog { border: 1px solid var(--border); border-radius: 16px; padding: 0; background: var(--surface); color: var(--text);
+         width: min(560px, calc(100vw - 32px)); box-shadow: 0 30px 80px rgba(5,8,20,.4); }
+dialog::backdrop { background: rgba(8,10,20,.45); backdrop-filter: blur(3px); }
+dialog .body { padding: 24px; max-height: 75vh; overflow: auto; }
+dialog .foot { padding: 12px 24px 18px; display: flex; justify-content: flex-end; gap: 8px; }
+dialog h1 { font-size: 20px; margin: 0 0 12px; letter-spacing: -.01em; }
+dialog ol, dialog ul { padding-left: 20px; margin: 8px 0; }
+dialog li { margin-bottom: 6px; }
+dialog kbd { font: inherit; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+.about { text-align: center; }
+.about-head { padding: 28px 24px 20px; background: linear-gradient(140deg, var(--ink-2), var(--ink-1)); color: var(--s-text); border-radius: 15px 15px 0 0; }
+.about-head img { width: 84px; height: 84px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.08); }
+.about-head h1 { font-size: 26px; margin: 14px 0 2px; }
+.about-head .ver { color: var(--s-text-2); font-size: 13px; }
+.about dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; text-align: left; font-size: 13px; margin: 16px 0 0; }
+.about dt { color: var(--text-3); }
+.about dd { margin: 0; overflow-wrap: anywhere; }
+.about .credits { font-size: 12px; color: var(--text-3); margin-top: 16px; text-align: left; line-height: 1.55; }
+footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
+
+@media (max-width: 800px) {
+  .grid, .cols, .minis, .hbars { grid-template-columns: 1fr; }
+  .hero { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .studio-top { grid-template-columns: 1fr; justify-items: center; }
+  .engine .label { display: none; }
+  .lanes { grid-template-columns: 70px 1fr; }
+  .appbar { gap: 10px; }
+}
+@media (max-width: 560px) {
+  .menubar .top { padding: 5px 6px; }
+  .brand span, .engine { display: none; }
 }
 </style>
 </head>
-<body>
-<main>
-  <header>
-    <h1>Transcriber</h1>
-    <span class="sub">whisper.cpp, running on this Mac</span>
-  </header>
+<body class="mode-file">
+<header class="appbar">
+  <div class="brand"><img src="branding/mark.svg" alt=""><span>Transcriber</span></div>
+  <nav class="menubar" id="menubar" role="menubar" aria-label="Main menu"></nav>
+  <div class="modes" role="tablist" aria-label="Mode">
+    <button role="tab" id="tab-file" aria-selected="true">FILE</button>
+    <button role="tab" id="tab-live" aria-selected="false"><span class="rd"></span>LIVE</button>
+  </div>
+  <div class="engine" id="engine"></div>
+</header>
 
-  <section class="card" id="filecard">
+<main>
+  <section class="card file-only" id="filecard">
     <h2>Recording</h2>
-    <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a file">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5"/><path d="M4 14v4a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-4"/></svg>
-      <div class="big">Drop an audio or video file here</div>
-      <div class="muted small">or click to choose one (mp4, mov, m4a, mp3, wav…)</div>
+    <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a recording">
+      <div class="bars" aria-hidden="true"><i style="animation-delay:-.1s"></i><i style="animation-delay:-.5s"></i><i style="animation-delay:-.9s"></i><i style="animation-delay:-.3s"></i><i style="animation-delay:-1.2s"></i><i style="animation-delay:-.7s"></i><i style="animation-delay:-.2s"></i><i style="animation-delay:-1s"></i><i style="animation-delay:-.4s"></i></div>
+      <div class="big">Drop a recording here</div>
+      <div class="muted small">or click to choose one: mp4, mov, m4a, mp3, wav and most other audio and video files</div>
     </div>
+    <input type="file" id="fileinput" accept="audio/*,video/*" class="hidden">
     <div id="fileinfo" class="hidden">
-      <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg></div>
+      <div class="icon"><img src="branding/mark.svg" alt=""></div>
       <div class="meta">
         <div class="name" id="fname"></div>
         <div class="path" id="fpath"></div>
@@ -217,22 +395,40 @@ footer { text-align: center; }
       </div>
       <button id="change">Change…</button>
     </div>
-    <div class="pathrow">
+    <div class="pathrow mac-only">
       <input type="text" id="pastepath" placeholder="…or paste a file path (in Finder: ⌥⌘C copies it)">
       <button id="usepath">Use path</button>
     </div>
     <div id="uploadnote" class="small muted hidden" style="margin-top:8px"></div>
   </section>
 
+  <section class="studio live-only" id="livestudio" aria-label="Live transcription">
+    <div class="live-top">
+      <button class="rec" id="rec"><span class="rd"></span><span id="reclabel">Start recording</span></button>
+      <button id="lstop" disabled>Stop and save</button>
+      <div class="ltimer" id="ltimer">0:00:00</div>
+      <div class="meter"><canvas id="meter" aria-label="Input level"></canvas></div>
+      <div class="lstatus" id="lstatus">Press Start recording (or <b>⌘R</b>) and allow microphone access.</div>
+    </div>
+    <div class="wavewrap" style="margin-top:0">
+      <canvas class="wave scope" id="scope" aria-label="Last minute of audio"></canvas>
+    </div>
+    <div class="legend">
+      <span><i style="background:linear-gradient(90deg,#4f9bff,#2fd3bd)"></i>Transcribed</span>
+      <span><i style="background:#7c8bb5"></i>Being transcribed</span>
+      <span><i style="background:#fab219"></i>Tag</span>
+      <span class="muted">Last 60 seconds</span>
+    </div>
+    <div class="tagbar" id="tagbar"></div>
+    <div class="tiles" id="ltiles" style="margin-top:14px"></div>
+    <div class="ledit" id="ledit"><p class="empty">The transcript appears here as you speak. Click any line to correct it while recording continues; underlined words are ones the model was unsure of.</p></div>
+  </section>
+
   <section class="card">
     <h2>Settings</h2>
     <div class="grid">
-      <div class="f" style="display:grid;gap:5px;font-size:13px;color:var(--text-2);font-weight:500">
-        Model
-        <div class="seg">
-          <label><input type="radio" name="model" value="turbo" checked>Turbo (good quality)</label>
-          <label><input type="radio" name="model" value="base">Base (fast, rough)</label>
-        </div>
+      <div class="f">Model
+        <div class="seg" id="models"></div>
       </div>
       <label class="f">Language
         <select id="language">
@@ -254,560 +450,207 @@ footer { text-align: center; }
           <option value="zh">Chinese</option>
         </select>
       </label>
+      <label class="f">Speakers <span class="hint">identified by voice; a 27 MB model is downloaded once</span>
+        <select id="speakers">
+          <option value="auto">Detect automatically</option>
+          <option value="off">Don't identify speakers</option>
+          <option value="1">One speaker</option>
+          <option value="2">Two speakers</option>
+          <option value="3">Three speakers</option>
+          <option value="4">Four speakers</option>
+          <option value="5">Five speakers</option>
+          <option value="6">Six speakers</option>
+        </select>
+      </label>
       <label class="f full">Title <span class="hint">heading of the Markdown file</span>
         <input type="text" id="title">
       </label>
       <label class="f">Output name <span class="hint">.md, .srt and .txt get this name</span>
         <input type="text" id="outname">
       </label>
-      <label class="f">Output folder
-        <div class="inline"><input type="text" id="outdir" placeholder="same folder as the recording"><button id="pickdir">Choose…</button></div>
+      <label class="f mac-only">Output folder
+        <span class="inline"><input type="text" id="outdir" placeholder="same folder as the recording"><button id="pickdir" type="button">Choose…</button></span>
       </label>
-      <label class="f full">Names and terms <span class="hint">proper nouns and jargon, comma-separated; helps the model spell them. Filled in from the file's name and tags.</span>
+      <label class="f full">Names and terms <span class="hint" id="termshint">proper nouns and jargon, comma-separated; helps the model spell them</span>
         <textarea id="prompt" rows="2" placeholder="Ada Lovelace, Charles Babbage, Analytical Engine"></textarea>
       </label>
       <label class="f full">Find and replace <span class="hint">one per line: wrong =&gt; right (whole words, case-sensitive)</span>
         <textarea id="replacements" rows="3" placeholder="Love Lace => Lovelace"></textarea>
       </label>
-      <details class="full">
+      <label class="f full live-only">Tags <span class="hint">one per line; press 1–9 while recording to mark the moment. Tags become headings; start a line with * for an inline marker instead.</span>
+        <textarea id="tags" rows="4"></textarea>
+      </label>
+      <details class="full file-only">
         <summary>Section headings (optional)</summary>
         <label class="f">One per line: time, then heading. Without these the transcript sits under a single “Transcript” heading.
           <textarea id="sections" rows="3" placeholder="0:00 Introduction&#10;12:30 First speaker&#10;58:10 Questions"></textarea>
         </label>
       </details>
     </div>
-    <div class="actions" style="margin-top:18px">
+    <div class="actions file-only" style="margin-top:18px">
       <button class="primary" id="go" disabled>Transcribe</button>
-      <label class="small" style="display:inline-flex;gap:6px;align-items:center;color:var(--text-2)"><input type="checkbox" id="autostart"> Start as soon as a file is chosen</label>
       <button id="cancel" class="hidden">Cancel</button>
+      <label class="check"><input type="checkbox" id="autostart"> Start as soon as a file is chosen</label>
       <span id="gohint" class="muted small">Choose a recording first.</span>
+    </div>
+    <div class="actions live-only" style="margin-top:18px">
+      <label class="check"><input type="checkbox" id="keepaudio" checked> Save the audio as well (.wav)</label>
     </div>
   </section>
 
-  <section class="card hidden" id="progresscard">
+  <section class="studio hidden" id="studio" aria-label="Progress">
     <h2 id="ptitle">Progress</h2>
     <div id="banner"></div>
-    <div class="steps" id="steps"></div>
-    <div class="bar" id="bar"><div></div></div>
+    <div class="studio-top" id="studiotop">
+      <div class="ring" id="ring">
+        <svg viewBox="0 0 120 120" aria-hidden="true">
+          <defs><linearGradient id="ringgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f9bff"/><stop offset="1" stop-color="#2fd3bd"/></linearGradient></defs>
+          <circle class="track" cx="60" cy="60" r="52" fill="none" stroke-width="9"/>
+          <circle class="arc" id="arc" cx="60" cy="60" r="52" fill="none" stroke="url(#ringgrad)" stroke-width="9" stroke-linecap="round" stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
+        </svg>
+        <div class="c"><div class="pct" id="pct">0<small>%</small></div><div class="lbl" id="ringlbl">Starting</div></div>
+      </div>
+      <div style="min-width:0">
+        <div class="stages" id="stages"></div>
+        <div class="tiles" id="tiles"></div>
+      </div>
+    </div>
     <div class="wavewrap" id="wavewrap">
-      <canvas id="wave" aria-label="Waveform with recognised speech"></canvas>
+      <canvas class="wave" id="wave" aria-label="Waveform with transcription progress"></canvas>
       <div class="tip hidden" id="wavetip"></div>
+      <div class="axis" id="axis"></div>
+      <div class="legend">
+        <span><i style="background:linear-gradient(90deg,#4f9bff,#2fd3bd)"></i>Audio transcribed</span>
+        <span><i style="background:var(--s-remaining)"></i>Remaining audio</span>
+        <span><i style="background:#2fd3bd"></i>Speech recognised</span>
+        <span><i style="background:rgba(255,255,255,.22)"></i>Silence ≥ 2 s</span>
+      </div>
     </div>
-    <div class="axis"><span>0:00:00</span><span id="axismid"></span><span id="axisend"></span></div>
-    <div class="legend">
-      <span><i style="background:var(--wave-done)"></i>Audio processed</span>
-      <span><i style="background:var(--wave-idle)"></i>Still to come</span>
-      <span><i style="background:var(--speech)"></i>Speech recognised</span>
+    <div class="minis" id="minis">
+      <div class="mini"><span class="now" id="speednow"></span><h3>Speed, × real time</h3><div id="speedchart"></div></div>
+      <div class="mini"><h3>Words per minute</h3><div id="wpmlive"></div></div>
+      <div class="mini"><h3>Emerging terms</h3><div class="terms" id="terms"></div></div>
     </div>
-    <div class="tiles" id="tiles"></div>
-    <div id="livewrap">
-      <div id="live" aria-live="polite"></div>
+    <div id="live" aria-live="polite"></div>
+  </section>
+
+  <section class="card hidden" id="summary">
+    <h2 id="sumtitle">Summary</h2>
+    <div class="hero" id="hero"></div>
+    <div class="stats" id="stats"></div>
+
+    <div class="section" id="timewrap">
+      <h3>Where the time went</h3>
+      <div class="timebar" id="timebar"></div>
+      <div class="keyrow" id="timekey"></div>
     </div>
-    <div id="wpmwrap" style="margin-top:18px">
+
+    <div class="section" id="docwrap">
+      <h3>Transcript</h3>
+      <div class="player">
+        <button id="playbtn" class="play" aria-label="Play">▶</button>
+        <button id="back5" title="Back 5 seconds">−5 s</button>
+        <button id="fwd5" title="Forward 5 seconds">+5 s</button>
+        <span id="ptime" class="ptime">0:00 / 0:00</span>
+        <canvas id="scrub" aria-label="Playback position; click to jump"></canvas>
+        <label class="vol" title="Volume">🔈<input type="range" id="pvol" min="0" max="1" step="0.05" value="0.5" aria-label="Volume"></label>
+        <select id="prate" aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+      </div>
+      <div class="spkbar" id="spkbar"></div>
+      <div class="doc" id="doclines"></div>
+      <p class="small muted" style="margin:8px 0 0">Click a time to play from there, a speaker chip to change who is speaking, or the text to correct it. <b>Space</b> plays and pauses when you're not typing.</p>
+    </div>
+
+    <div class="section">
+      <h3>Timeline</h3>
+      <div class="laneswrap"><div class="lanes" id="lanes"></div><div class="tip hidden" id="lanetip"></div></div>
+      <div class="keyrow" id="lanekey"></div>
+    </div>
+
+    <div class="section">
       <h3>Words per minute of recording</h3>
       <div class="chart" id="wpm"></div>
     </div>
-  </section>
 
-  <section class="card hidden" id="summarycard">
-    <h2>Summary</h2>
-    <div class="tiles" id="sumtiles" style="margin-top:0"></div>
-    <div class="cols">
+    <div class="section cols">
+      <div id="checkwrap">
+        <h3>Words to check</h3>
+        <p class="small muted" style="margin:0 0 8px">Words the model was least sure of, lowest first, with their time. Click one to add it to Find and replace.</p>
+        <div class="chips" id="lowwords"></div>
+      </div>
       <div>
-        <h3>Possible names to check</h3>
-        <p class="small muted" style="margin:0 0 8px">Capitalised words mid-sentence. Click one to add it to Find and replace, edit the right-hand side, then apply.</p>
+        <h3>Possible names</h3>
+        <p class="small muted" style="margin:0 0 8px">Capitalised words mid-sentence. Click one to add it to Find and replace.</p>
         <div class="chips" id="names"></div>
       </div>
-      <div>
-        <h3>Most frequent words</h3>
-        <div class="chips" id="topwords"></div>
-      </div>
     </div>
-    <div id="repwrap" class="hidden" style="margin-top:20px">
+
+    <div class="section">
+      <h3>Most frequent words</h3>
+      <div class="hbars" id="topwords"></div>
+    </div>
+
+    <div class="section hidden" id="repwrap">
       <h3>Corrections applied</h3>
       <table><thead><tr><th>Find</th><th>Replace with</th><th style="text-align:right">Matches</th></tr></thead><tbody id="reps"></tbody></table>
     </div>
-    <div class="actions" style="margin-top:16px">
-      <button id="rewrite">Apply current corrections and headings to these files</button>
+
+    <div class="section actions">
+      <button id="rewrite">Save corrections, speakers and headings to the files</button>
       <span id="rewritenote" class="small muted"></span>
     </div>
-    <div class="files" id="files"></div>
+    <div class="section files" id="files"></div>
   </section>
 
-  <footer><button class="link" id="quit">Stop the transcriber</button></footer>
+  <footer id="footer"></footer>
 </main>
 
-<script>
-"use strict";
-const $ = (id) => document.getElementById(id);
-const state = { file: null, job: null, segments: [], wave: null, polling: null, duration: 0, stats: null };
-const STAGES = ["Reading file", "Extracting audio", "Transcribing", "Writing files"];
-const store = {
-  get(k) { try { return localStorage.getItem("transcriber." + k); } catch (e) { return null; } },
-  set(k, v) { try { localStorage.setItem("transcriber." + k, v); } catch (e) {} },
-};
+<dialog id="dlg-about" aria-label="About Transcriber"><div class="about">
+  <div class="about-head">
+    <img src="branding/mark.svg" alt="">
+    <h1>Transcriber</h1>
+    <div class="ver" id="about-ver"></div>
+  </div>
+  <div class="body" style="padding-top:18px">
+    <p style="margin:0">Transcription of recordings and live speech with Whisper, on your Mac or in the browser.</p>
+    <dl id="about-dl"></dl>
+    <div class="credits">Whisper speech-recognition models by OpenAI. whisper.cpp by Georgi Gerganov and contributors. transformers.js and the ONNX model conversions by Hugging Face. FFmpeg by the FFmpeg developers.</div>
+  </div>
+  <div class="foot"><button data-close>Close</button></div>
+</div></dialog>
 
-function hms(s) {
-  s = Math.max(0, Math.floor(s || 0));
-  return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-function human(s) {
-  if (s == null || !isFinite(s)) return "–";
-  s = Math.round(s);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-  return `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, "0")}m`;
-}
-function clock(s) {  // m:ss for recordings under an hour, h:mm:ss otherwise
-  if ((state.duration || 0) >= 3600) return hms(s);
-  s = Math.max(0, Math.floor(s || 0));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-const fmt = (n) => Math.round(n).toLocaleString();
-const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const wordCount = (t) => (t.match(/[A-Za-z][A-Za-z'’-]*/g) || []).length;
+<dialog id="dlg-help" aria-label="How to use Transcriber"><div class="body">
+  <h1>How to use Transcriber</h1>
+  <p><b>FILE mode</b></p>
+  <ol>
+    <li>Drop a recording on the page, or use <b>File › Open Recording…</b> (<kbd>⌘O</kbd>).</li>
+    <li>Title, output name and names-and-terms are filled in from the file. With <b>Start as soon as a file is chosen</b> ticked, transcription begins straight away.</li>
+    <li>In the summary, check <b>Words to check</b> and <b>Possible names</b>. Clicking one adds it to Find and replace; edit the right-hand side and choose <b>Apply current corrections</b>. The transcript is rewritten without transcribing again.</li>
+  </ol>
+  <p><b>LIVE mode</b></p>
+  <ol>
+    <li>Press <b>Start recording</b> (<kbd>⌘R</kbd>) and allow the microphone. Text appears a few seconds behind speech; grey italic text is provisional.</li>
+    <li>Click any line to correct it while recording continues. Underlined words are ones the model was unsure of.</li>
+    <li>Press <kbd>1</kbd>–<kbd>9</kbd> (outside a text field) or click a tag to mark the current moment, or type a tag and press Return. Tags become headings in the Markdown; tags starting with * become inline markers.</li>
+    <li><b>Stop and save</b> (<kbd>⌘S</kbd>) writes the .md, .srt, .txt and, if chosen, the audio.</li>
+  </ol>
+  <p><b>Two engines.</b> Opened from the Mac app, transcription uses whisper.cpp with Metal (about 20× real time for files) and saves beside the recording. On the web page it runs in the browser: the model is downloaded once and cached, it is slower, nothing is uploaded, and the files are downloaded at the end. When the web page finds the Mac app running it offers to switch.</p>
+  <div class="foot" style="padding:12px 0 0"><button data-close>Close</button></div>
+</div></dialog>
 
-async function api(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Transcriber": "1" },
-                                body: JSON.stringify(body || {}) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
-  return j;
-}
+<dialog id="dlg-keys" aria-label="Keyboard shortcuts"><div class="body">
+  <h1>Keyboard shortcuts</h1>
+  <table id="keys"></table>
+  <div class="foot" style="padding:16px 0 0"><button data-close>Close</button></div>
+</div></dialog>
 
-/* ---------------- choosing a file */
+<dialog id="dlg-log" aria-label="Technical log"><div class="body">
+  <h1>Technical log</h1>
+  <pre id="logtext" style="font-size:11.5px;white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:10px;max-height:55vh;overflow:auto"></pre>
+  <div class="foot" style="padding:12px 0 0"><button data-close>Close</button></div>
+</div></dialog>
 
-function setFile(info, note) {
-  state.file = info;
-  $("drop").classList.add("hidden");
-  $("fileinfo").classList.remove("hidden");
-  $("fname").textContent = info.name;
-  $("fpath").textContent = `${info.uploaded ? "copied in for transcription" : info.dir} · ${hms(info.duration)}`;
-  $("title").value = info.title;
-  $("outname").value = info.outname;
-  $("outdir").value = info.uploaded ? (store.get("lastoutdir") || state.downloads || "") : info.dir;
-  const m = info.meta || {};
-  $("fmeta").textContent = [m.by, m.date, m.url].filter(Boolean).join(" · ");
-  if (info.language && [...$("language").options].some((o) => o.value === info.language)) {
-    $("language").value = info.language;
-  }
-  // Names and terms belong to a recording: replace what was filled in for the last file,
-  // but keep anything typed by hand, adding the new file's terms to it.
-  const typed = $("prompt").value.trim();
-  if (!typed || typed === state.autoTerms) $("prompt").value = info.terms || "";
-  else if (info.terms) {
-    const have = new Set(typed.split(/\s*,\s*/));
-    const extra = info.terms.split(/\s*,\s*/).filter((t) => !have.has(t));
-    if (extra.length) $("prompt").value = typed + ", " + extra.join(", ");
-  }
-  state.autoTerms = $("prompt").value.trim();
-  $("uploadnote").textContent = note || "";
-  $("uploadnote").classList.toggle("hidden", !note);
-  $("go").disabled = false;
-  $("gohint").textContent = `${hms(info.duration)} of audio. Turbo takes roughly ${human(8 + info.duration / 20)}, Base about a third of that.`;
-  if ($("autostart").checked && !(state.job && state.job.state === "running") && $("outdir").value) $("go").click();
-}
-
-async function chooseFile() {
-  try {
-    const info = await api("/api/choose-file");
-    if (!info.cancelled) setFile(info);
-  } catch (e) { alert(e.message); }
-}
-
-async function droppedFile(file) {
-  $("uploadnote").classList.remove("hidden");
-  $("uploadnote").textContent = `Locating ${file.name}…`;
-  try {
-    const info = await api("/api/resolve", { name: file.name, size: file.size, modified: file.lastModified });
-    if (info.path) return setFile(info);
-  } catch (e) { /* fall through to upload */ }
-  const xhr = new XMLHttpRequest();
-  xhr.open("PUT", "/api/upload?name=" + encodeURIComponent(file.name));
-  xhr.setRequestHeader("X-Transcriber", "1");
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) $("uploadnote").textContent = `Copying ${file.name}: ${Math.round(100 * e.loaded / e.total)}%`;
-  };
-  xhr.onload = () => {
-    const j = JSON.parse(xhr.responseText || "{}");
-    if (xhr.status !== 200) { $("uploadnote").textContent = j.error || "Upload failed."; return; }
-    setFile(j, "The file's original location couldn't be found, so it was copied in (and is deleted afterwards). " +
-               "Transcripts go to the output folder shown below.");
-  };
-  xhr.onerror = () => { $("uploadnote").textContent = "Upload failed."; };
-  xhr.send(file);
-}
-
-$("drop").addEventListener("click", chooseFile);
-$("drop").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") chooseFile(); });
-$("change").addEventListener("click", chooseFile);
-$("usepath").addEventListener("click", async () => {
-  const p = $("pastepath").value.trim();
-  if (!p) return;
-  try { setFile(await api("/api/probe", { path: p })); $("pastepath").value = ""; }
-  catch (e) { alert(e.message); }
-});
-$("pastepath").addEventListener("keydown", (e) => { if (e.key === "Enter") $("usepath").click(); });
-["dragenter", "dragover"].forEach((ev) => document.addEventListener(ev, (e) => {
-  e.preventDefault(); $("drop").classList.add("over");
-}));
-["dragleave", "drop"].forEach((ev) => document.addEventListener(ev, (e) => {
-  e.preventDefault(); if (ev === "drop" || !e.relatedTarget) $("drop").classList.remove("over");
-}));
-document.addEventListener("drop", (e) => {
-  const f = e.dataTransfer && e.dataTransfer.files[0];
-  if (f) droppedFile(f);
-});
-$("pickdir").addEventListener("click", async () => {
-  try {
-    const r = await api("/api/choose-folder", { start: $("outdir").value || (state.file && state.file.dir) });
-    if (r.path) $("outdir").value = r.path;
-  } catch (e) { alert(e.message); }
-});
-
-/* ---------------- remembered settings */
-
-for (const id of ["replacements", "language"]) {
-  const v = store.get(id);
-  if (v !== null) $(id).value = v;
-  $(id).addEventListener("change", () => store.set(id, $(id).value));
-}
-$("autostart").checked = store.get("autostart") !== "0";
-$("autostart").addEventListener("change", () => store.set("autostart", $("autostart").checked ? "1" : "0"));
-const savedModel = store.get("model");
-if (savedModel) document.querySelector(`input[name=model][value=${savedModel}]`).checked = true;
-document.querySelectorAll("input[name=model]").forEach((r) => r.addEventListener("change", () => store.set("model", r.value)));
-
-/* ---------------- running */
-
-$("go").addEventListener("click", async () => {
-  if (!state.file) return;
-  const outdir = $("outdir").value.trim();
-  if (state.file.uploaded && !outdir) { alert("Choose an output folder first."); return; }
-  if (outdir) store.set("lastoutdir", outdir);
-  ["replacements", "language"].forEach((id) => store.set(id, $(id).value));
-  try {
-    await api("/api/transcribe", {
-      path: state.file.path, name: state.file.name, uploaded: !!state.file.uploaded,
-      model: document.querySelector("input[name=model]:checked").value,
-      language: $("language").value, title: $("title").value, outname: $("outname").value,
-      outdir, prompt: $("prompt").value, replacements: $("replacements").value, sections: $("sections").value,
-    });
-  } catch (e) { alert(e.message); return; }
-  state.segments = []; state.wave = null; state.stats = null; state.duration = state.file.duration;
-  $("live").innerHTML = "";
-  $("summarycard").classList.add("hidden");
-  $("progresscard").classList.remove("hidden");
-  $("progresscard").scrollIntoView({ behavior: "smooth", block: "start" });
-  poll(true);
-});
-$("cancel").addEventListener("click", () => api("/api/cancel").catch(() => {}));
-
-async function poll(reset) {
-  clearTimeout(state.polling);
-  let data;
-  try {
-    const since = reset ? 0 : state.segments.length;
-    const r = await fetch(`/api/status?since=${since}${state.wave ? "" : "&wave=1"}`);
-    data = await r.json();
-  } catch (e) {
-    state.polling = setTimeout(poll, 3000);
-    return;
-  }
-  state.downloads = data.downloads;
-  const job = data.job;
-  if (job) render(job, reset);
-  const running = job && job.state === "running";
-  state.polling = setTimeout(poll, running ? 700 : 30000);
-}
-
-function render(job, reset) {
-  state.job = job;
-  if (reset) state.segments = [];
-  if (job.duration) state.duration = job.duration;
-  if (job.wave) state.wave = job.wave;
-  const fresh = job.segments || [];
-  state.segments.push(...fresh);
-  const running = job.state === "running";
-  $("progresscard").classList.remove("hidden");
-  $("go").disabled = running || !state.file;
-  $("cancel").classList.toggle("hidden", !running);
-  $("ptitle").textContent = running ? `Transcribing ${job.name || ""}` : (job.name || "Progress");
-
-  // stages
-  const idx = job.state === "done" ? STAGES.length : STAGES.indexOf(job.stage);
-  $("steps").innerHTML = STAGES.map((s, i) =>
-    `<span class="step ${i < idx ? "done" : i === idx && running ? "active" : ""}"><span class="dot"></span>${s}</span>`).join("");
-  const bar = $("bar");
-  bar.classList.toggle("hidden", !running);
-  bar.classList.toggle("indeterminate", running && job.stage === "Reading file");
-  bar.firstElementChild.style.width = `${job.progress}%`;
-
-  // banner
-  const ok = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="m8 12.5 2.8 2.8L16.5 9.5"/></svg>';
-  const bad = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M12 7.5v5.5M12 16.5v.01"/></svg>';
-  if (job.state === "done") {
-    $("banner").innerHTML = `<div class="banner ok">${ok}<div><b>Finished</b> in ${human(job.elapsed)}. Three files written.</div></div>`;
-  } else if (job.state === "error") {
-    $("banner").innerHTML = `<div class="banner err">${bad}<div><b>Something went wrong.</b> ${esc(job.message)}
-      <details style="margin-top:6px"><summary>Technical log</summary><pre class="log">${esc(job.log.join("\n"))}</pre></details></div></div>`;
-  } else if (job.state === "cancelled") {
-    $("banner").innerHTML = `<div class="banner err">${bad}<div><b>Cancelled.</b> No files were written.</div></div>`;
-  } else {
-    $("banner").innerHTML = "";
-  }
-
-  // live tiles
-  const pos = job.state === "done" ? state.duration
-            : state.segments.length ? state.segments[state.segments.length - 1].e : 0;
-  const words = state.segments.reduce((n, s) => n + wordCount(s.t), 0);
-  const speed = job.stage === "Transcribing" && job.stage_elapsed > 1 ? pos / job.stage_elapsed : null;
-  if (running) {
-    $("tiles").innerHTML = [
-      ["Position", `${clock(pos)}<small> of ${clock(state.duration)}</small>`],
-      ["Done", `${Math.floor(job.progress)}<small>%</small>`],
-      ["Speed", speed ? `${speed.toFixed(1)}<small>× real time</small>` : "–"],
-      ["Elapsed", human(job.elapsed)],
-      ["Time left", job.eta != null ? `~${human(job.eta)}` : "–"],
-      ["Words so far", fmt(words)],
-    ].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
-  }
-  $("tiles").classList.toggle("hidden", !running);
-  $("livewrap").classList.toggle("hidden", !running);
-
-  // live text
-  if (running && fresh.length) {
-    const live = $("live");
-    if (reset) live.innerHTML = "";
-    for (const s of fresh) {
-      const p = document.createElement("p");
-      p.innerHTML = `<time>${hms(s.s)}</time>${esc(s.t)}`;
-      live.appendChild(p);
-    }
-    while (live.children.length > 200) live.removeChild(live.firstChild);
-    live.scrollTop = live.scrollHeight;
-  }
-
-  $("axismid").textContent = state.duration ? hms(state.duration / 2) : "";
-  $("axisend").textContent = state.duration ? hms(state.duration) : "";
-  drawWave(job.state === "done" ? state.duration : pos);
-  drawWpm(job.stats ? job.stats.per_minute : livePerMinute());
-
-  if (job.state === "done" && job.stats && JSON.stringify(state.stats) !== JSON.stringify(job.stats)) {
-    renderSummary(job);
-  }
-}
-
-/* ---------------- waveform */
-
-let hoverX = null;
-function drawWave(pos) {
-  const c = $("wave"), dpr = window.devicePixelRatio || 1;
-  const W = c.clientWidth, H = c.clientHeight;
-  if (!W) return;
-  if (c.width !== W * dpr) { c.width = W * dpr; c.height = H * dpr; }
-  const g = c.getContext("2d");
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, W, H);
-  const css = getComputedStyle(document.documentElement);
-  const col = (n) => css.getPropertyValue(n).trim();
-  const D = state.duration || 1;
-  const band = 16, gap = 8, waveH = H - band - gap - 10, mid = 6 + waveH / 2;
-  const peaks = state.wave;
-  const px = (t) => (t / D) * W;
-
-  if (peaks && peaks.length) {
-    const step = W / peaks.length, bw = Math.max(1, step - (step > 3 ? 1 : 0));
-    for (let i = 0; i < peaks.length; i++) {
-      const x = i * step, t = (i / peaks.length) * D;
-      const h = Math.max(1.5, peaks[i] * waveH);
-      g.fillStyle = t < pos ? col("--wave-done") : col("--wave-idle");
-      g.fillRect(x, mid - h / 2, bw, h);
-    }
-  } else {
-    // placeholder while the audio is being extracted
-    const n = 120, t0 = performance.now() / 600;
-    for (let i = 0; i < n; i++) {
-      const h = 6 + 18 * (0.5 + 0.5 * Math.sin(i * 0.35 + t0)) * (0.5 + 0.5 * Math.sin(i * 0.07));
-      g.fillStyle = col("--wave-idle");
-      g.fillRect((i * W) / n, mid - h / 2, Math.max(1, W / n - 2), h);
-    }
-  }
-
-  // speech band: recognised segments
-  const y = H - band - 4;
-  g.fillStyle = col("--surface");
-  g.fillRect(0, y, W, band);
-  g.fillStyle = col("--speech");
-  for (const s of state.segments) {
-    const x0 = px(s.s), x1 = Math.max(x0 + 1, px(s.e) - 1);
-    g.fillRect(x0, y + 2, x1 - x0, band - 4);
-  }
-
-  // playhead
-  if (pos > 0 && pos < D) {
-    g.fillStyle = col("--text");
-    g.fillRect(px(pos) - 1, 2, 2, H - 4);
-    g.beginPath(); g.arc(px(pos), 4, 4, 0, Math.PI * 2); g.fill();
-  }
-  if (hoverX != null) {
-    g.fillStyle = col("--text-3");
-    g.fillRect(hoverX, 0, 1, H);
-  }
-}
-(function animate() {
-  if (!state.wave && state.job && state.job.state === "running") drawWave(0);
-  requestAnimationFrame(animate);
-})();
-window.addEventListener("resize", () => state.job && drawWave(currentPos()));
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => state.job && drawWave(currentPos()));
-
-$("wave").addEventListener("mousemove", (e) => {
-  const c = $("wave"), r = c.getBoundingClientRect();
-  hoverX = e.clientX - r.left;
-  const t = (hoverX / r.width) * (state.duration || 0);
-  const seg = state.segments.find((s) => t >= s.s && t <= s.e + 0.5);
-  const tip = $("wavetip");
-  tip.innerHTML = `<b>${hms(t)}</b>${seg ? " · " + esc(seg.t) : ""}`;
-  tip.classList.remove("hidden");
-  const left = Math.min(Math.max(0, hoverX + 12), r.width - tip.offsetWidth);
-  tip.style.left = `${left}px`;
-  tip.style.top = `-8px`;
-  tip.style.transform = "translateY(-100%)";
-  drawWave(currentPos());
-});
-$("wave").addEventListener("mouseleave", () => { hoverX = null; $("wavetip").classList.add("hidden"); drawWave(currentPos()); });
-function currentPos() {
-  if (!state.job) return 0;
-  if (state.job.state === "done") return state.duration;
-  return state.segments.length ? state.segments[state.segments.length - 1].e : 0;
-}
-
-/* ---------------- words-per-minute chart */
-
-function livePerMinute() {
-  const n = Math.max(1, Math.ceil((state.duration || 0) / 60));
-  const out = new Array(n).fill(0);
-  for (const s of state.segments) {
-    const w = wordCount(s.t), a = s.s, b = Math.max(s.e, s.s + 0.01);
-    for (let m = Math.floor(a / 60); m * 60 < b && m < n; m++) {
-      out[m] += (w * (Math.min(b, (m + 1) * 60) - Math.max(a, m * 60))) / (b - a);
-    }
-  }
-  return out;
-}
-
-function drawWpm(values) {
-  const host = $("wpm");
-  const W = host.clientWidth || 800, H = 130, padL = 30, padB = 18, padT = 6;
-  const n = values.length;
-  const max = Math.max(200, ...values);
-  const top = Math.ceil(max / 50) * 50;
-  const cw = (W - padL) / n, bw = Math.min(36, Math.max(1, cw - (cw > 6 ? 2 : cw > 3 ? 1 : 0)));
-  const y = (v) => padT + (H - padT - padB) * (1 - v / top);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Words per minute, by minute of the recording"><g class="grid">`;
-  for (let v = 0; v <= top; v += top / 2) {
-    svg += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end">${v}</text>`;
-  }
-  svg += `</g><g>`;
-  values.forEach((v, i) => {
-    const x = padL + i * cw + (cw - bw) / 2, h = Math.max(0, y(0) - y(v));
-    if (h > 0) {
-      const r = Math.min(4, bw / 2, h);
-      svg += `<path class="b" d="M${x},${y(0)} V${y(v) + r} q0,-${r} ${r},-${r} H${x + bw - r} q${r},0 ${r},${r} V${y(0)} Z" fill="var(--accent)"/>`;
-    }
-  });
-  svg += `</g><g class="xaxis">`;
-  const every = n > 60 ? 10 : n > 20 ? 5 : n > 8 ? 2 : 1;
-  for (let i = 0; i < n; i += every) {
-    svg += `<text x="${padL + (i + 0.5) * cw}" y="${H - 4}" text-anchor="middle">${i}m</text>`;
-  }
-  svg += `</g><g>`;
-  values.forEach((v, i) => {
-    svg += `<rect class="hit" data-i="${i}" x="${padL + i * cw}" y="0" width="${cw}" height="${H}"/>`;
-  });
-  svg += `</g></svg><div class="tip hidden"></div>`;
-  host.innerHTML = svg;
-  const tip = host.querySelector(".tip");
-  host.querySelectorAll("rect.hit").forEach((r) => {
-    r.addEventListener("mouseenter", () => {
-      const i = +r.dataset.i;
-      tip.innerHTML = `<b>${hms(i * 60)}–${hms(Math.min((i + 1) * 60, state.duration))}</b><br>${fmt(values[i])} words`;
-      tip.classList.remove("hidden");
-      const bx = ((+r.getAttribute("x") + cw / 2) / W) * host.clientWidth;
-      tip.style.left = `${Math.min(Math.max(0, bx - 40), host.clientWidth - 140)}px`;
-      tip.style.top = "-8px";
-      tip.style.transform = "translateY(-100%)";
-    });
-    r.addEventListener("mouseleave", () => tip.classList.add("hidden"));
-  });
-}
-
-/* ---------------- summary */
-
-function renderSummary(job) {
-  const s = job.stats;
-  state.stats = s;
-  $("summarycard").classList.remove("hidden");
-  const tiles = [
-    ["Recording", hms(s.duration)],
-    ["Processing time", human(s.processing)],
-    ["Speed", s.speed ? `${s.speed.toFixed(1)}<small>× real time</small>` : "–"],
-    ["Words", fmt(s.words)],
-    ["Distinct words", fmt(s.unique_words)],
-    ["Pace, overall", `${fmt(s.wpm)}<small> wpm</small>`],
-    ["Pace, excl. silence", `${fmt(s.speaking_wpm)}<small> wpm</small>`],
-    ["Audible", `${Math.round(100 * s.audible_ratio)}<small>%</small>`],
-    ["Silences ≥ 2s", fmt(s.pauses)],
-    ["Longest silence", s.longest_pause ? `${s.longest_pause.seconds.toFixed(1)}<small>s at ${clock(s.longest_pause.at)}</small>` : "–"],
-    ["Paragraphs", fmt(s.paragraphs)],
-    ["Segments", fmt(s.segments)],
-    ["Model", `<small style="font-size:15px;color:var(--text)">${esc(s.model)}</small>`],
-    ["Language", `<small style="font-size:15px;color:var(--text)">${esc(s.language || "auto")}</small>`],
-  ];
-  $("sumtiles").innerHTML = tiles.map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
-  $("names").innerHTML = s.names.length
-    ? s.names.map(([w, c]) => `<button class="chip" data-w="${esc(w)}">${esc(w)}<span>${c}</span></button>`).join("")
-    : '<span class="muted small">None found.</span>';
-  $("topwords").innerHTML = s.top_words.map(([w, c]) => `<span class="chip">${esc(w)}<span>${c}</span></span>`).join("");
-  $("names").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
-    const ta = $("replacements"), w = b.dataset.w;
-    ta.value = (ta.value.trim() ? ta.value.replace(/\s*$/, "\n") : "") + `${w} => ${w}`;
-    store.set("replacements", ta.value);
-    ta.scrollIntoView({ behavior: "smooth", block: "center" });
-    ta.focus();
-    ta.setSelectionRange(ta.value.length - w.length, ta.value.length);
-  }));
-  $("repwrap").classList.toggle("hidden", !s.replacements.length);
-  $("reps").innerHTML = s.replacements.map((r) =>
-    `<tr><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td class="n">${r.count}</td></tr>`).join("");
-  $("files").innerHTML = job.outputs.map((p) => {
-    const ext = p.split(".").pop();
-    return `<div class="file"><span class="ext">${ext}</span><span class="p">${esc(p)}</span>
-      <button data-open="${esc(p)}">Open</button><button data-reveal="${esc(p)}">Show in Finder</button></div>`;
-  }).join("");
-  $("files").querySelectorAll("button").forEach((b) => b.addEventListener("click", () =>
-    api("/api/open", { path: b.dataset.open || b.dataset.reveal, reveal: !!b.dataset.reveal }).catch((e) => alert(e.message))));
-}
-
-$("rewrite").addEventListener("click", async () => {
-  $("rewritenote").textContent = "Updating…";
-  try {
-    const r = await api("/api/rewrite", { replacements: $("replacements").value, sections: $("sections").value, title: $("title").value });
-    store.set("replacements", $("replacements").value);
-    $("rewritenote").textContent = "Files updated.";
-    state.job.stats = r.stats;
-    renderSummary(state.job);
-  } catch (e) { $("rewritenote").textContent = e.message; }
-});
-
-$("quit").addEventListener("click", async () => {
-  if (state.job && state.job.state === "running" && !confirm("A transcription is running. Stop it and quit?")) return;
-  try { await api("/api/quit"); } catch (e) {}
-  document.body.innerHTML = '<main><div class="card"><h2>Transcriber stopped</h2><p>Open it again from Applications (Transcriber).</p></div></main>';
-});
-
-poll(true);
-</script>
+<audio id="audio" preload="auto"></audio>
+<script type="module" src="app.js"></script>
 </body>
 </html>

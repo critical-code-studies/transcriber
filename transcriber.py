@@ -23,18 +23,28 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("TRANSCRIBER_PORT", "8765"))
 HERE = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(HERE, "VERSION")) as _f:
+    VERSION = _f.read().strip()
+HOST = "127.0.0.1"
+PAGES_ORIGIN = "https://critical-code-studies.github.io"   # may read status/about to offer this engine
+STATIC = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
+          "format.js": "text/javascript; charset=utf-8", "worker.js": "text/javascript; charset=utf-8",
+          "VERSION": "text/plain; charset=utf-8"}
+BRANDING_TYPES = {".svg": "image/svg+xml", ".png": "image/png"}
+PORT = int(os.environ.get("TRANSCRIBER_PORT", "8765"))
 
 BIN = "/opt/homebrew/bin"
 FFMPEG = os.path.join(BIN, "ffmpeg")
 FFPROBE = os.path.join(BIN, "ffprobe")
 WHISPER = os.path.join(BIN, "whisper-cli")
+WHISPER_SERVER = os.path.join(BIN, "whisper-server")
+LIVE_PORT = 8766
 MODEL_DIR = os.path.expanduser("~/Documents/whisper-models")
 MODELS = {
     "turbo": ("ggml-large-v3-turbo.bin", "large-v3-turbo"),
@@ -50,6 +60,10 @@ for _old in glob.glob(os.path.join(tempfile.gettempdir(), "transcriber-uploads-*
     shutil.rmtree(_old, True)
 UPLOAD_ROOT = tempfile.mkdtemp(prefix="transcriber-uploads-")
 atexit.register(shutil.rmtree, UPLOAD_ROOT, True)
+for _old in glob.glob(os.path.join(tempfile.gettempdir(), "transcriber-audio-*")):
+    shutil.rmtree(_old, True)
+AUDIO_ROOT = tempfile.mkdtemp(prefix="transcriber-audio-")   # the last job's 16 kHz audio, for playback
+atexit.register(shutil.rmtree, AUDIO_ROOT, True)
 
 last_seen = time.time()
 last_dir = os.path.expanduser("~")
@@ -138,6 +152,8 @@ def stem_of(path):
     stem = re.sub(r"\s*\[[A-Za-z0-9_-]{6,}\]\s*$", "", stem)       # yt-dlp video id
     stem = re.sub(r"\s*\((?:\d{3,4}p|HD|4K|audio|video)\)", "", stem, flags=re.I)
     stem = re.sub(r"[_]+", " ", stem)
+    if " " not in stem.strip():
+        stem = stem.replace("-", " ")                  # analytical-engine-talk
     stem = re.sub(r"\s+", " ", stem).strip(" .-")
     return stem[:1].upper() + stem[1:] if stem else "Recording"
 
@@ -172,6 +188,25 @@ def suggest_terms(path, tags):
             found.append(term)
     out = ", ".join(found)
     return out[:300].rsplit(",", 1)[0] if len(out) > 300 else out
+
+
+def tool_version(binary):
+    """Version from a Homebrew Cellar path, e.g. .../Cellar/ffmpeg/9.0.1/bin/ffmpeg."""
+    m = re.search(r"/Cellar/[^/]+/([^/]+)/", os.path.realpath(binary))
+    return m.group(1) if m else None
+
+
+def about():
+    return {
+        "version": VERSION,
+        "python": sys.version.split()[0],
+        "whisper": tool_version(WHISPER),
+        "ffmpeg": tool_version(FFMPEG),
+        "models": {k: os.path.isfile(os.path.join(MODEL_DIR, v[0])) for k, v in MODELS.items()},
+        "model_dir": MODEL_DIR.replace(os.path.expanduser("~"), "~"),
+        "folder": HERE.replace(os.path.expanduser("~"), "~"),
+        "port": PORT,
+    }
 
 
 def describe(path):
@@ -223,6 +258,46 @@ def parse_sections(text):
     return sorted(sections)
 
 
+def parse_whisper_json(path):
+    """Segments plus per-word confidence from whisper-cli's --output-json-full."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        data = json.load(f)
+    segs, confidence, words = [], [], []
+    for seg in data.get("transcription", []):
+        text = seg.get("text", "").strip()
+        start, end = seg["offsets"]["from"], seg["offsets"]["to"]
+        if not text or text == "[BLANK_AUDIO]":
+            continue
+        segs.append({"start": start, "end": end, "text": text})
+        probs = []
+        current = None
+        for tok in seg.get("tokens", []):
+            t = tok.get("text", "")
+            if t.startswith("[_") or "p" not in tok:
+                continue
+            probs.append(tok["p"])
+            if current is None or t.startswith(" "):
+                current = {"w": "", "p": 1.0, "t": tok["offsets"]["from"] / 1000}
+                words.append(current)
+            current["w"] += t
+            current["p"] = min(current["p"], tok["p"])
+        if probs:
+            confidence.append({"s": start / 1000, "e": end / 1000,
+                               "p": round(sum(probs) / len(probs), 3)})
+    low, seen = [], set()
+    for w in sorted(words, key=lambda w: w["p"]):
+        clean = re.sub(r"^[^\w]+|[^\w]+$", "", w["w"].strip())
+        if len(clean) < 3 or not re.search(r"[A-Za-z]", clean) or clean.lower() in seen \
+                or clean.lower() in STOPWORDS:
+            continue
+        if w["p"] >= 0.4 or len(low) >= 30:
+            break
+        seen.add(clean.lower())
+        low.append({"w": clean, "p": round(w["p"], 3), "t": w["t"]})
+    return segs, {"segments": confidence, "low_words": low,
+                  "mean": round(sum(c["p"] for c in confidence) / len(confidence), 3) if confidence else None}
+
+
 def parse_srt(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         blocks = re.split(r"\n\s*\n", f.read().strip())
@@ -248,12 +323,17 @@ SENTENCE_END = re.compile(r"[.?!][\"'”’)\]]*$")
 
 def sentences(segs):
     """Re-cut whisper segments at sentence ends; a sentence's start time is interpolated
-    from its character offset within the segment it begins in."""
+    from its character offset within the segment it begins in. A change of speaker also
+    ends a sentence."""
     out, cur = [], None
     for seg in segs:
         text = seg["text"]
+        speaker = seg.get("speaker")
+        if cur is not None and speaker != cur["speaker"]:
+            out.append(cur)
+            cur = None
         span = max(seg["end"] - seg["start"], 1)
-        pieces = re.split(r"(?<=[.?!])[\"'”’)\]]*\s+", text)
+        pieces = re.split(r"(?<=[.?!])\s+|(?<=[.?!][\"'”’)\]])\s+", text)
         offset = 0
         for piece in pieces:
             if not piece:
@@ -262,7 +342,7 @@ def sentences(segs):
             offset = max(at, offset) + len(piece)
             start = seg["start"] + span * max(at, 0) / max(len(text), 1)
             if cur is None:
-                cur = {"start": start, "parts": []}
+                cur = {"start": start, "parts": [], "speaker": speaker}
             cur["parts"].append(piece)
             cur["end"] = seg["end"]
             if SENTENCE_END.search(piece) or (cur["end"] - cur["start"]) / 1000 > 60:
@@ -275,7 +355,7 @@ def sentences(segs):
     return out
 
 
-def build_markdown(segs, sections, pairs, header):
+def build_markdown(segs, sections, pairs, header, pauses=()):
     sents = sentences(segs)
     # Each heading goes before the sentence that starts closest to its time.
     breaks, lo = {}, 0
@@ -289,27 +369,53 @@ def build_markdown(segs, sections, pairs, header):
     if not sections:
         out.append("## Transcript\n")
     count = 0
-    para, para_start = [], 0
+    para, para_start, para_speaker, labelled = [], 0, None, None
 
     def flush():
-        nonlocal count
+        nonlocal count, labelled
         if para:
             text = apply_replacements(" ".join(para), pairs)
-            out.append("**[%s]** %s\n" % (hms(para_start / 1000), text))
+            label = ""
+            if para_speaker and para_speaker != labelled:
+                label = "[%s] " % para_speaker
+                labelled = para_speaker
+            out.append("**[%s]** %s%s\n" % (hms(para_start / 1000), label, text))
             count += 1
             del para[:]
 
+    prev_end = None
     for i, s in enumerate(sents):
         if i in breaks:
             flush()
             out.extend("## %s\n" % title for title in breaks[i])
+            labelled = None                             # name the speaker again after a heading
+        elif para and s.get("speaker") != para_speaker:
+            flush()                                     # a new speaker starts a paragraph
+        elif para and prev_end is not None and (s["start"] - para_start) / 1000 >= 15 and any(
+                at >= prev_end / 1000 - 0.6 and at + length <= s["start"] / 1000 + 0.6
+                for length, at in pauses):
+            flush()                                     # a silence of 2 s or more starts a paragraph
+        prev_end = s["end"]
         if not para:
-            para_start = s["start"]
+            para_start, para_speaker = s["start"], s.get("speaker")
         para.append(s["text"])
         if (s["end"] - para_start) / 1000 >= PARAGRAPH_SECONDS:
             flush()
     flush()
     return "\n".join(out), count
+
+
+def speaker_lines(segs, pairs):
+    """Segment texts with "[Speaker]" prefixed wherever the speaker changes."""
+    lines, last = [], None
+    for seg in segs:
+        text = apply_replacements(seg["text"], pairs)
+        speaker = seg.get("speaker")
+        if speaker and speaker != last:
+            text = "[%s] %s" % (speaker, text)
+        last = speaker
+        lines.append(text)
+    return lines
 
 
 STOPWORDS = set("""a about above after again against all also am an and any are as at be because
@@ -358,7 +464,63 @@ def analyse_audio(wav, buckets=720):
         "peaks": [round((p / top) ** 0.5, 3) for p in peaks],
         "pauses": pauses,
         "audible": sum(1 for level in levels if level >= threshold) / 10,
+        "levels": levels,
+        "threshold": threshold,
     }
+
+
+MIN_GAP = 4.0
+
+
+def find_gaps(segs, duration, audio):
+    """Stretches of at least MIN_GAP seconds with clear sound but no recognised text.
+    segs are in ms; returns (start, end) pairs in seconds."""
+    if not audio or not audio.get("levels"):
+        return []
+    levels, threshold = audio["levels"], audio["threshold"]
+    candidates, cursor = [], 0.0
+    for seg in sorted(segs, key=lambda x: x["start"]):
+        a, b = seg["start"] / 1000, seg["end"] / 1000
+        if a - cursor >= MIN_GAP:
+            candidates.append((cursor, a))
+        cursor = max(cursor, b)
+    if duration - cursor >= MIN_GAP:
+        candidates.append((cursor, duration))
+    gaps = []
+    for a, b in candidates:
+        window = levels[int(a * 10):int(b * 10)]
+        audible = sum(1 for level in window if level >= threshold) / 10
+        if audible >= 2.5 and audible >= 0.4 * (b - a):
+            gaps.append((a, b))
+    return gaps
+
+
+def trim_overlap(before, text, after):
+    """Drop words at the edges of text that repeat the end of before or the start of after."""
+    norm = lambda w: re.sub(r"[^\w']", "", w.lower())
+    words = text.split()
+    prev = [norm(w) for w in before.split()][-8:]
+    for k in range(min(8, len(words), len(prev)), 0, -1):
+        if [norm(w) for w in words[:k]] == prev[-k:]:
+            words = words[k:]
+            break
+    nxt = [norm(w) for w in after.split()][:8]
+    for k in range(min(8, len(words), len(nxt)), 0, -1):
+        if [norm(w) for w in words[-k:]] == nxt[:k]:
+            words = words[:-k]
+            break
+    return " ".join(words)
+
+
+def write_wav_slice(src, dest, start, end):
+    with wave.open(src, "rb") as w:
+        rate = w.getframerate()
+        w.setpos(min(w.getnframes(), int(start * rate)))
+        frames = w.readframes(int((end - start) * rate))
+        params = w.getparams()
+    with wave.open(dest, "wb") as out:
+        out.setparams(params)
+        out.writeframes(frames)
 
 
 def compute_stats(segs, duration, pairs, raw_text, timings, paragraphs, sections, audio):
@@ -399,8 +561,8 @@ def compute_stats(segs, duration, pairs, raw_text, timings, paragraphs, sections
     return {
         "duration": duration,
         "processing": timings.get("total", 0),
-        "transcribe_seconds": timings.get("transcribe", 0),
-        "speed": duration / timings["transcribe"] if timings.get("transcribe") else None,
+        "timings": timings,
+        "speed": duration / timings["Transcribing"] if timings.get("Transcribing") else None,
         "words": words,
         "unique_words": len(counts),
         "wpm": words / minutes,
@@ -455,9 +617,9 @@ def resolve_dropped(name, size, modified_ms):
     return None
 
 
-def unique_base(outdir, name):
+def unique_base(outdir, name, exts=(".md", ".srt", ".txt")):
     base, n = os.path.join(outdir, name), 2
-    while any(os.path.exists(base + ext) for ext in (".md", ".srt", ".txt")):
+    while any(os.path.exists(base + ext) for ext in exts):
         base = os.path.join(outdir, "%s-%d" % (name, n))
         n += 1
     return base
@@ -484,6 +646,9 @@ class Job:
         self.segments = []
         self.wave = None
         self.audio = None
+        self.confidence = None
+        self.recovered = []
+        self.audio_path = None
         self.meta = {}
         self.stats = None
         self.timings = {}
@@ -507,19 +672,19 @@ class Job:
             "state": self.state, "stage": self.stage, "progress": round(self.progress, 1),
             "message": self.message, "outputs": self.outputs, "preview": list(self.preview),
             "log": list(self.log), "elapsed": now - self.started, "eta": eta,
-            "stage_elapsed": now - self.stage_started,
+            "stage_elapsed": now - self.stage_started, "timings": self.timings,
             "input": self.opts.get("path"), "name": self.opts.get("name"),
             "duration": self.duration, "segments": self.segments[since:],
             "segment_count": len(self.segments), "stats": self.stats,
             "wave": self.wave if want_wave else None, "has_wave": self.wave is not None,
+            "pauses": self.audio["pauses"] if want_wave and self.audio else None,
             "model": self.opts.get("model") or "turbo",
         }
 
     def set_stage(self, stage, progress):
         now = time.time()
-        if self.stage in ("Extracting audio", "Transcribing"):
-            self.timings["extract" if self.stage == "Extracting audio" else "transcribe"] = \
-                now - self.stage_started
+        if self.stage != "Starting":
+            self.timings[self.stage] = now - self.stage_started
         self.stage, self.progress, self.stage_started = stage, progress, now
 
     def cancel(self):
@@ -540,6 +705,10 @@ class Job:
             self.state, self.message = "error", "%s: %s" % (type(e).__name__, e)
         finally:
             self.finished = time.time()
+            wav = os.path.join(work, "audio.wav")
+            if self.state == "done" and os.path.isfile(wav):
+                self.audio_path = os.path.join(AUDIO_ROOT, "job-%d.wav" % int(self.started))
+                shutil.move(wav, self.audio_path)
             shutil.rmtree(work, True)
             if self.opts.get("uploaded"):
                 shutil.rmtree(os.path.dirname(self.opts["path"]), True)
@@ -572,7 +741,7 @@ class Job:
     def _on_ffmpeg(self, line):
         m = re.match(r"out_time_(?:us|ms)=(\d+)", line)
         if m and self.duration:
-            self.progress = min(8.0, 8.0 * int(m.group(1)) / 1e6 / self.duration)
+            self.progress = min(7.0, 7.0 * int(m.group(1)) / 1e6 / self.duration)
 
     def _on_whisper(self, line):
         m = re.match(r"\[(\d+):(\d+):(\d+)\.\d+ --> (\d+):(\d+):(\d+)\.\d+\]\s*(.*)", line)
@@ -613,6 +782,7 @@ class Job:
                       "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
                       "-progress", "pipe:1", "-nostats", wav],
                      self._on_ffmpeg, "ffmpeg")
+        self.set_stage("Analysing audio", 7)
         try:
             self.audio = analyse_audio(wav)
             self.wave = self.audio["peaks"]
@@ -623,7 +793,7 @@ class Job:
         language = (o.get("language") or "en").strip() or "en"
         raw = os.path.join(work, "whisper")
         cmd = [WHISPER, "-m", model, "-f", wav, "-l", language, "-t", str(THREADS),
-               "-osrt", "-of", raw]
+               "-ojf", "-of", raw]
         prompt = (o.get("prompt") or "").strip()
         if prompt:
             cmd += ["--prompt", prompt]
@@ -631,8 +801,47 @@ class Job:
         if self.cancelled:
             raise Cancelled()
 
+        self.raw_segs, self.confidence = parse_whisper_json(raw + ".json")
+        self.set_stage("Checking for gaps", 98)
+        self.recovered = []
+        for a, b in find_gaps(self.raw_segs, self.duration, self.audio):
+            if self.cancelled:
+                raise Cancelled()
+            piece = os.path.join(work, "gap.wav")
+            write_wav_slice(wav, piece, a, b)
+            gcmd = [WHISPER, "-m", model, "-f", piece, "-l", language, "-t", str(THREADS),
+                    "-np", "-ojf", "-of", os.path.join(work, "gap")]
+            if prompt:
+                gcmd += ["--prompt", prompt]
+            r = subprocess.run(gcmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                self.log.append("gap %.1f-%.1f s not re-transcribed (exit %d)" % (a, b, r.returncode))
+                continue
+            found, conf = parse_whisper_json(os.path.join(work, "gap.json"))
+            ms = int(a * 1000)
+            before = " ".join(x["text"] for x in self.raw_segs if x["end"] <= ms + 500)[-200:]
+            after = " ".join(x["text"] for x in self.raw_segs if x["start"] >= int(b * 1000) - 500)[:200]
+            added = []
+            for i, seg in enumerate(found):
+                text = trim_overlap(before if i == 0 else "", seg["text"],
+                                    after if i == len(found) - 1 else "")
+                if text:
+                    added.append({"start": seg["start"] + ms, "end": seg["end"] + ms, "text": text})
+            if not added:
+                continue
+            self.raw_segs = sorted(self.raw_segs + added, key=lambda x: x["start"])
+            for c in conf["segments"]:
+                c["s"] += a
+                c["e"] += a
+            for w in conf["low_words"]:
+                w["t"] += a
+            self.confidence["segments"] = sorted(self.confidence["segments"] + conf["segments"], key=lambda c: c["s"])
+            self.confidence["low_words"] = sorted(self.confidence["low_words"] + conf["low_words"],
+                                                  key=lambda w: w["p"])[:30]
+            self.segments.extend({"s": x["start"] / 1000, "e": x["end"] / 1000, "t": x["text"]} for x in added)
+            self.recovered.append({"s": a, "e": b, "words": sum(len(x["text"].split()) for x in added)})
+            self.log.append("re-transcribed a skipped passage at %s-%s" % (hms(a), hms(b)))
         self.set_stage("Writing files", 99)
-        self.raw_segs = parse_srt(raw + ".srt")
         if not self.raw_segs:
             raise JobError("No speech was recognised in this file.")
         self.timings["total"] = time.time() - self.started
@@ -651,12 +860,12 @@ class Job:
         pairs = parse_replacements(o.get("replacements"))
         sections = parse_sections(o.get("sections"))
 
+        lines = speaker_lines(segs, pairs)
         with open(base + ".srt", "w", encoding="utf-8") as f:
-            for i, s in enumerate(segs, 1):
-                f.write("%d\n%s --> %s\n%s\n\n" % (i, srt_time(s["start"]), srt_time(s["end"]),
-                                                   apply_replacements(s["text"], pairs)))
+            for i, (s, line) in enumerate(zip(segs, lines), 1):
+                f.write("%d\n%s --> %s\n%s\n\n" % (i, srt_time(s["start"]), srt_time(s["end"]), line))
         with open(base + ".txt", "w", encoding="utf-8") as f:
-            f.write("\n".join(apply_replacements(s["text"], pairs) for s in segs) + "\n")
+            f.write("\n".join(lines) + "\n")
 
         title = (o.get("title") or "").strip() or stem_of(src)
         same_dir = os.path.realpath(self.outdir) == os.path.realpath(os.path.dirname(src))
@@ -668,6 +877,13 @@ class Job:
             notes.append("Names and terms supplied to the model as a prompt.")
         if pairs:
             notes.append("%d find/replace correction%s applied." % (len(pairs), "" if len(pairs) == 1 else "s"))
+        speakers = sorted({x["speaker"] for x in segs if x.get("speaker")})
+        if speakers:
+            notes.append("Speakers identified automatically by voice (%d); check the attributions." % len(speakers))
+        if self.recovered:
+            n = len(self.recovered)
+            notes.append("%d passage%s skipped by the first pass (%s) re-transcribed separately." % (
+                n, "" if n == 1 else "s", ", ".join("%s–%s" % (hms(g["s"]), hms(g["e"])) for g in self.recovered)))
         notes.append("Names, technical terms and quotations not checked against the recording. "
                      "Timestamps mark paragraph starts.")
         meta = []
@@ -682,7 +898,8 @@ class Job:
         header = "# %s\n\nSource: `%s` (%s)%s.%s\n\n%s %s\n" % (
             title, o.get("name") or os.path.basename(src), hms(self.duration), where,
             meta_line, method, " ".join(notes))
-        markdown, paragraphs = build_markdown(segs, sections, pairs, header)
+        markdown, paragraphs = build_markdown(segs, sections, pairs, header,
+                                              (self.audio or {}).get("pauses") or ())
         with open(base + ".md", "w", encoding="utf-8") as f:
             f.write(markdown)
 
@@ -691,13 +908,99 @@ class Job:
                                    paragraphs, len(sections), self.audio)
         self.stats["language"] = self.language
         self.stats["model"] = self.model_label
+        self.stats["confidence"] = self.confidence
+        self.stats["recovered"] = self.recovered
         self.outputs = [base + ext for ext in (".md", ".srt", ".txt")]
+
+
+# ---------------------------------------------------------------- live transcription
+
+class Live:
+    """A resident whisper-server, so each few-second chunk skips the model load."""
+    proc = None
+    model = None
+    lock = threading.Lock()
+    bases = set()          # transcript bases written by live sessions (allowed for open/audio)
+
+    @classmethod
+    def start(cls, key):
+        with cls.lock:
+            if cls.proc and cls.proc.poll() is None and cls.model == key:
+                return
+            cls.stop_locked()
+            model_file = os.path.join(MODEL_DIR, MODELS.get(key, MODELS["turbo"])[0])
+            if not os.path.isfile(WHISPER_SERVER):
+                raise JobError("whisper-server is not installed in %s." % BIN)
+            if not os.path.isfile(model_file):
+                raise JobError("Model not found: %s" % model_file)
+            log = open(os.path.expanduser("~/Library/Logs/Transcriber-live.log"), "ab")
+            cls.proc = subprocess.Popen(
+                [WHISPER_SERVER, "-m", model_file, "--host", "127.0.0.1", "--port", str(LIVE_PORT),
+                 "-t", str(THREADS)], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+            cls.model = key
+            for _ in range(240):
+                if cls.proc.poll() is not None:
+                    raise JobError("whisper-server exited; see ~/Library/Logs/Transcriber-live.log")
+                try:
+                    urllib.request.urlopen("http://127.0.0.1:%d/" % LIVE_PORT, timeout=1).read()
+                    return
+                except Exception:
+                    time.sleep(0.25)
+            raise JobError("whisper-server did not start within a minute.")
+
+    @classmethod
+    def stop_locked(cls):
+        if cls.proc and cls.proc.poll() is None:
+            cls.proc.terminate()
+            try:
+                cls.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                cls.proc.kill()
+        cls.proc = cls.model = None
+
+    @classmethod
+    def stop(cls):
+        with cls.lock:
+            cls.stop_locked()
+
+    @classmethod
+    def transcribe(cls, wav, language, prompt):
+        if not (cls.proc and cls.proc.poll() is None):
+            raise JobError("The live engine isn't running; press Start recording again.")
+        boundary = "transcriber%d" % int(time.time() * 1000)
+        fields = [("response_format", "verbose_json"), ("temperature", "0"),
+                  ("language", language or "en")]
+        if prompt:
+            fields.append(("prompt", prompt))
+        body = b""
+        for name, value in fields:
+            body += ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
+                     % (boundary, name, value)).encode()
+        body += ("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"chunk.wav\"\r\n"
+                 "Content-Type: audio/wav\r\n\r\n" % boundary).encode() + wav + \
+            ("\r\n--%s--\r\n" % boundary).encode()
+        req = urllib.request.Request("http://127.0.0.1:%d/inference" % LIVE_PORT, data=body,
+                                     headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        segments = []
+        for seg in data.get("segments", []):
+            text = (seg.get("text") or "").strip()
+            if not text or text == "[BLANK_AUDIO]":
+                continue
+            words = [{"w": w.get("word", ""), "p": round(w.get("probability", 1.0), 3)}
+                     for w in seg.get("words", []) if not w.get("word", "").strip().startswith("[_")]
+            segments.append({"s": seg.get("start", 0), "e": seg.get("end", 0), "t": text, "words": words})
+        return segments
+
+
+atexit.register(Live.stop)
 
 
 # ---------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Transcriber/1.0"
+    server_version = "Transcriber/" + VERSION
 
     def log_message(self, fmt, *args):
         pass
@@ -707,8 +1010,44 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if self.headers.get("Origin") == PAGES_ORIGIN and self.command == "GET":
+            self.send_header("Access-Control-Allow-Origin", PAGES_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_file_range(self, path, ctype):
+        """Serve a file with HTTP Range support, so the audio player can seek."""
+        size = os.path.getsize(path)
+        start, end = 0, size - 1
+        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else size - 1
+            else:
+                start = max(0, size - int(m.group(2)))
+            end = min(end, size - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            try:
+                while remaining > 0:
+                    chunk = f.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json")
@@ -723,13 +1062,59 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def do_OPTIONS(self):
+        """Preflight from the GitHub Pages copy of the page (Private Network Access)."""
+        if self.headers.get("Origin") != PAGES_ORIGIN:
+            return self._json({"error": "forbidden"}, 403)
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", PAGES_ORIGIN)
+        self.send_header("Access-Control-Allow-Methods", "GET")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         if not self._guard():
             return
         path = urlparse(self.path).path
-        if path in ("/", "/index.html"):
-            with open(os.path.join(HERE, "index.html"), "rb") as f:
-                self._send(200, f.read(), "text/html; charset=utf-8")
+        name = "index.html" if path == "/" else path.lstrip("/")
+        ext = os.path.splitext(name)[1]
+        if name in STATIC or (name.startswith("branding/") and "/" not in name[9:]
+                              and ext in BRANDING_TYPES):
+            try:
+                with open(os.path.join(HERE, name), "rb") as f:
+                    self._send(200, f.read(), STATIC.get(name) or BRANDING_TYPES[ext])
+            except OSError:
+                self._json({"error": "not found"}, 404)
+        elif path == "/api/segments":
+            if not job or job.state != "done":
+                return self._json({"error": "No finished transcript."}, 404)
+            self._json({"segments": [{"s": x["start"] / 1000, "e": x["end"] / 1000, "t": x["text"],
+                                      "spk": x.get("speaker")} for x in job.raw_segs]})
+        elif path == "/api/clip":
+            # raw 16-bit PCM for one span of the last job's audio (speaker identification)
+            q = parse_qs(urlparse(self.path).query)
+            if not job or not job.audio_path or not os.path.isfile(job.audio_path):
+                return self._json({"error": "No audio."}, 404)
+            a, b = float(q.get("s", ["0"])[0]), float(q.get("e", ["0"])[0])
+            with wave.open(job.audio_path, "rb") as w:
+                rate = w.getframerate()
+                w.setpos(min(w.getnframes(), max(0, int(a * rate))))
+                frames = w.readframes(max(0, int((min(b, a + 30) - a) * rate)))
+            self._send(200, frames, "application/octet-stream")
+        elif path == "/api/audio":
+            if not job or not job.audio_path or not os.path.isfile(job.audio_path):
+                return self._json({"error": "No audio."}, 404)
+            self._send_file_range(job.audio_path, "audio/wav")
+        elif path == "/api/transcript":
+            kind = parse_qs(urlparse(self.path).query).get("kind", ["md"])[0]
+            files = [f for f in (job.outputs if job else []) if f.endswith("." + kind)]
+            if not files:
+                return self._json({"error": "No finished transcript."}, 404)
+            with open(files[0], "rb") as f:
+                self._send(200, f.read(), "text/plain; charset=utf-8")
+        elif path == "/api/about":
+            self._json(about())
         elif path == "/api/status":
             q = parse_qs(urlparse(self.path).query)
             since = int(q.get("since", ["0"])[0] or 0)
@@ -737,6 +1122,7 @@ class Handler(BaseHTTPRequestHandler):
                 "job": job.snapshot(since, q.get("wave") == ["1"]) if job else None,
                 "models": {k: os.path.isfile(os.path.join(MODEL_DIR, v[0])) for k, v in MODELS.items()},
                 "downloads": os.path.expanduser("~/Downloads"),
+                "version": VERSION,
             })
         else:
             self._json({"error": "not found"}, 404)
@@ -745,6 +1131,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard(write=True):
             return
         url = urlparse(self.path)
+        if url.path == "/api/live/audio":
+            base = parse_qs(url.query).get("base", [""])[0]
+            if base not in Live.bases:
+                return self._json({"error": "unknown transcript"}, 400)
+            remaining = int(self.headers.get("Content-Length") or 0)
+            with open(base + ".wav", "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+            return self._json({"ok": True, "path": base + ".wav"})
         if url.path != "/api/upload":
             return self._json({"error": "not found"}, 404)
         name = os.path.basename(unquote(parse_qs(url.query).get("name", ["upload"])[0])) or "upload"
@@ -772,7 +1171,31 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             n = int(self.headers.get("Content-Length") or 0)
+            if path == "/api/live/chunk":
+                q = parse_qs(urlparse(self.path).query)
+                wav = self.rfile.read(n)
+                segs = Live.transcribe(wav, q.get("language", ["en"])[0], q.get("prompt", [""])[0])
+                return self._json({"segments": segs})
             body = json.loads(self.rfile.read(n) or b"{}")
+            if path == "/api/live/start":
+                Live.start(body.get("model") or "turbo")
+                return self._json({"ok": True})
+            if path == "/api/live/stop":
+                Live.stop()
+                return self._json({"ok": True})
+            if path == "/api/live/save":
+                base = body.get("base")
+                if base not in Live.bases:
+                    outdir = os.path.expanduser(body.get("outdir") or "")
+                    if not os.path.isdir(outdir) or not os.access(outdir, os.W_OK):
+                        raise JobError("Output folder isn't a writable folder: %s" % outdir)
+                    name = re.sub(r"[/:]", "-", (body.get("outname") or "").strip()) or "live-transcript"
+                    base = unique_base(outdir, name, (".md", ".srt", ".txt", ".wav"))
+                    Live.bases.add(base)
+                for ext in ("md", "srt", "txt"):
+                    with open("%s.%s" % (base, ext), "w", encoding="utf-8") as f:
+                        f.write(body.get(ext) or "")
+                return self._json({"base": base, "outputs": [base + e for e in (".md", ".srt", ".txt")]})
             if path == "/api/choose-file":
                 p = osa_choose("file", "Choose a recording to transcribe", last_dir)
                 if p:
@@ -795,6 +1218,8 @@ class Handler(BaseHTTPRequestHandler):
                 with job_lock:
                     if job and job.state == "running":
                         return self._json({"error": "A transcription is already running."}, 409)
+                    if job and job.audio_path and os.path.isfile(job.audio_path):
+                        os.remove(job.audio_path)
                     job = Job(body)
                     threading.Thread(target=job.run, daemon=True).start()
                 return self._json({"ok": True})
@@ -804,15 +1229,31 @@ class Handler(BaseHTTPRequestHandler):
                 for key in ("replacements", "sections", "title"):
                     if key in body:
                         job.opts[key] = body[key]
+                if body.get("segments") is not None:
+                    edits = body["segments"]
+                    if len(edits) != len(job.raw_segs):
+                        raise JobError("The transcript changed on the server; reload the page.")
+                    for seg, edit in zip(job.raw_segs, edits):
+                        seg["text"] = (edit.get("text") or "").strip() or seg["text"]
+                        seg["speaker"] = edit.get("speaker") or None
                 job.write_outputs()
                 return self._json({"ok": True, "stats": job.stats})
+            if path == "/api/reset":
+                with job_lock:
+                    if job and job.state == "running":
+                        return self._json({"error": "A transcription is running."}, 409)
+                    if job and job.audio_path and os.path.isfile(job.audio_path):
+                        os.remove(job.audio_path)
+                    job = None
+                return self._json({"ok": True})
             if path == "/api/cancel":
                 if job:
                     job.cancel()
                 return self._json({"ok": True})
             if path == "/api/open":
                 p = body.get("path", "")
-                if job and p in job.outputs:
+                live_ok = os.path.splitext(p)[0] in Live.bases
+                if (job and p in job.outputs) or live_ok:
                     subprocess.run(["open", "-R", p] if body.get("reveal") else ["open", p])
                 return self._json({"ok": True})
             if path == "/api/quit":
@@ -846,7 +1287,7 @@ def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     threading.Thread(target=watchdog, daemon=True).start()
-    print("Transcriber on http://%s:%d/" % (HOST, PORT), flush=True)
+    print("Transcriber %s on http://%s:%d/" % (VERSION, HOST, PORT), flush=True)
     try:
         server.serve_forever()
     except (KeyboardInterrupt, SystemExit):

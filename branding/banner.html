@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html, body { margin: 0; }
+body { width: 1280px; height: 360px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+       background: radial-gradient(700px 300px at 18% 0%, rgba(79,155,255,.30), transparent 70%),
+                   radial-gradient(600px 300px at 95% 110%, rgba(47,211,189,.22), transparent 70%),
+                   linear-gradient(110deg, #0c1020, #1d2645); color: #e9eefb; }
+.row { display: flex; align-items: center; gap: 44px; padding: 70px 84px 0; }
+img { width: 168px; height: 168px; border-radius: 38px; box-shadow: 0 18px 50px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.08); }
+h1 { font-size: 92px; letter-spacing: -.035em; margin: 0; font-weight: 750; line-height: 1; }
+p { font-size: 27px; margin: 18px 0 0; color: #a9b3cf; letter-spacing: -.005em; }
+.modes { display: flex; gap: 10px; margin-top: 22px; }
+.modes span { font-size: 15px; font-weight: 700; letter-spacing: .12em; padding: 6px 16px; border-radius: 9px; background: rgba(255,255,255,.08); color: #a9b3cf; }
+.modes span:first-child { background: linear-gradient(100deg, #4f9bff, #2fd3bd); color: #06101f; }
+.modes i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #ff4d5e; margin-right: 8px; vertical-align: 1px; }
+.wave { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; display: flex; align-items: flex-end; gap: 5px; padding: 0 0 0 4px; opacity: .55; }
+.wave b { flex: 1; border-radius: 3px 3px 0 0; background: linear-gradient(#4f9bff, #2fd3bd); }
+</style></head>
+<body>
+<div class="row">
+  <img src="mark.svg" alt="">
+  <div>
+    <h1>Transcriber</h1>
+    <p>Recordings and live speech to Markdown, subtitles and text, with Whisper.</p>
+    <div class="modes"><span>FILE</span><span><i></i>LIVE</span><span>THIS MAC</span><span>IN THE BROWSER</span></div>
+  </div>
+</div>
+<div class="wave" id="w"></div>
+<script>
+const w = document.getElementById("w");
+for (let i = 0; i < 150; i++) {
+  const h = 10 + 46 * Math.abs(Math.sin(i * 0.37) * Math.cos(i * 0.11 + 1)) ;
+  const b = document.createElement("b"); b.style.height = h.toFixed(0) + "px"; w.appendChild(b);
+}
+</script>
+</body></html>
