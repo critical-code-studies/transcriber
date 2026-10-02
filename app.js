@@ -27,9 +27,13 @@ const S = {
 
 /* ================================================================ utilities */
 
+// On the web version nothing derived from a transcription is kept in the browser: no draft, no
+// find/replace list (it holds names), no tag names, no speaker voices. Only plain preferences.
+const PRIVATE_KEYS = ["livedraft", "replacements", "tags", "voices", "lastoutdir"];
+const keepsData = (k) => ENGINE === "mac" || !PRIVATE_KEYS.includes(k);
 const store = {
-  get(k) { try { return localStorage.getItem("transcriber." + k); } catch (e) { return null; } },
-  set(k, v) { try { localStorage.setItem("transcriber." + k, v); } catch (e) { /* private mode */ } },
+  get(k) { if (!keepsData(k)) return null; try { return localStorage.getItem("transcriber." + k); } catch (e) { return null; } },
+  set(k, v) { if (!keepsData(k)) return; try { localStorage.setItem("transcriber." + k, v); } catch (e) { /* private mode */ } },
   del(k) { try { localStorage.removeItem("transcriber." + k); } catch (e) { /* private mode */ } },
 };
 const hms = F.hms;
@@ -96,8 +100,18 @@ function wavBlob(int16, rate = 16000) {
 
 /* ================================================================ mode, engine badge, theme */
 
+// One project at a time: a recording (FILE) or a live session (LIVE). Switching to the other mode
+// with something open closes it first; files already written are left alone.
+const hasProject = () => !!(S.file || S.doc || (S.job && S.project === "file") || (S.live && (S.live.segs.length || ["saving", "saved"].includes(S.live.state))));
+
 function setMode(mode) {
-  if (S.live && S.live.state === "recording" && mode === "file") { toast("Stop the live recording first."); return; }
+  if (mode !== S.mode && S.project && S.project !== mode && hasProject()) {
+    if (S.live && ["recording", "paused", "saving"].includes(S.live.state)) { toast("Stop the live recording first."); return false; }
+    if (running()) { toast("Cancel the transcription first."); return false; }
+    const what = S.project === "file" ? "the current recording" : "the current live session";
+    if (!confirm(`Close ${what} and start a new project? Files already saved are kept.`)) return false;
+    newProject(true);
+  }
   S.mode = mode;
   document.body.classList.toggle("mode-file", mode === "file");
   document.body.classList.toggle("mode-live", mode === "live");
@@ -109,6 +123,7 @@ function setMode(mode) {
   else if (S.file) applyFileDefaults(S.file);
   $("studio").classList.toggle("hidden", mode !== "file" || !S.job);
   $("summary").classList.toggle("hidden", !(S.stats && S.stats.mode === mode));
+  return true;
 }
 
 function renderEngine() {
@@ -122,7 +137,8 @@ function renderEngine() {
       (S.localAbout ? `<button class="switch" id="switchmac" title="Open the copy served by the Transcriber app on this Mac">Use this Mac's engine</button>` : "");
     if (S.localAbout) $("switchmac").onclick = () => { location.href = LOCAL_URL; };
   }
-  $("footer").innerHTML = `Transcriber ${esc(S.version)} · <a href="${REPO}" target="_blank" rel="noopener">source</a>` +
+  $("footer").innerHTML = (isMac ? "" : `<p style="margin:0 0 6px">Runs entirely in this browser. Recordings and transcripts are never uploaded, and nothing from them is kept once you close or reload the page: download the files before you leave.</p>`) +
+    `Transcriber ${esc(S.version)} · <a href="${REPO}" target="_blank" rel="noopener">source</a>` +
     (isMac ? ` · <button class="link" id="quit">Stop the transcriber</button>` : "");
   if (isMac) $("quit").onclick = quit;
 }
@@ -154,6 +170,8 @@ function applyFileDefaults(info) {
 }
 
 function setFile(info, note) {
+  if (S.job || S.doc) clearResults();
+  S.project = "file";
   S.file = info;
   $("drop").classList.add("hidden");
   $("fileinfo").classList.remove("hidden");
@@ -289,7 +307,12 @@ async function poll(reset) {
     return;
   }
   S.downloads = data.downloads;
-  const job = data.job;
+  let job = data.job;
+  if (job && S.project === "live") job = null;                     // the live session is the project
+  if (job && !S.project) {
+    if (S.mode === "live" && job.state !== "running") { api("/api/reset").catch(() => {}); job = null; }
+    else { if (S.mode !== "file") setMode("file"); S.project = "file"; }
+  }
   if (job) {
     if (reset) S.segments = [];
     if (job.duration) S.duration = job.duration;
@@ -1003,7 +1026,7 @@ async function quit() {
 /* ================================================================ speakers, transcript panel, playback */
 
 const SPK_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
-const SAME_SPEAKER = 0.45;   // cosine similarity of two voice embeddings at or above which they count as one speaker
+const SAME_SPEAKER = 0.38;   // cosine similarity of two voice embeddings at or above which they count as one speaker
 S.doc = null;                // the transcript under review: {mode, segs: [{s, e, t, spk, edited}], duration, peaks}
 S.names = {};                // speaker number -> name typed by the user
 
@@ -1111,7 +1134,8 @@ async function identifySpeakers() {
         else if (m.total) status(`Identifying speakers: downloading the voice model, ${Math.round((m.loaded || 0) / 1e6)} of ${Math.round(m.total / 1e6)} MB…`);
       });
       doc.segs.forEach((x, i) => { if (fresh[i]) x.vec = fresh[i]; });
-      const labels = clusterSpeakers(doc.segs.map((x) => x.vec || null), setting === "auto" ? 0 : +setting);
+      const labels = stableLabels(clusterSpeakers(doc.segs.map((x) => x.vec || null), setting === "auto" ? 0 : +setting),
+                                  doc.segs.map((x) => x.spk));
       doc.segs.forEach((x, i) => { if (!x.spkManual) x.spk = labels[i]; });
     }
     S.spkStatus = "";
@@ -1154,10 +1178,74 @@ function liveSpeaker(line) {
   }).catch((e) => { $("lstatus").textContent = `Speaker identification paused: ${e.message}`; });
 }
 
-function cycleSpeaker(x) {
-  const max = Math.max(0, ...(S.doc ? speakersInUse() : S.live.segs.map((s) => s.spk || 0)));
-  x.spk = x.spk ? (x.spk % (max + 1)) + 1 : 1;
-  x.spkManual = true;
+// Keep speaker numbers (and the names typed for them) on the voices they had before regrouping.
+function stableLabels(labels, previous) {
+  const groups = new Map();
+  labels.forEach((l, i) => {
+    if (l == null) return;
+    if (!groups.has(l)) groups.set(l, new Map());
+    const p = previous[i];
+    if (p) groups.get(l).set(p, (groups.get(l).get(p) || 0) + 1);
+  });
+  const taken = new Set(), map = new Map();
+  const bySize = [...groups].sort((a, b) => [...b[1].values()].reduce((x, y) => x + y, 0) - [...a[1].values()].reduce((x, y) => x + y, 0));
+  for (const [l, prev] of bySize) {
+    const best = [...prev].sort((a, b) => b[1] - a[1]).find(([p]) => !taken.has(p));
+    if (best) { map.set(l, best[0]); taken.add(best[0]); }
+  }
+  let next = Math.max(0, ...previous.filter(Boolean), ...taken) + 1;
+  for (const [l] of bySize) if (!map.has(l)) map.set(l, next++);
+  return labels.map((l) => (l == null ? null : map.get(l)));
+}
+
+// The speaker menu, on a speaker chip or a line's time (left or right click): set this line's
+// speaker, or move every line of this speaker to another (which merges two speakers).
+function speakerMenu(e, x, lines, refreshLine, refreshAll) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeMenus();
+  document.querySelector(".menu.ctx")?.remove();
+  const used = [...new Set(lines.map((l) => l.spk).filter(Boolean))].sort((a, b) => a - b);
+  const fresh = Math.max(0, ...used) + 1;
+  const m = document.createElement("div");
+  m.className = "menu ctx";
+  m.setAttribute("role", "menu");
+  const head = (t) => { const h = document.createElement("div"); h.className = "hd"; h.textContent = t; m.appendChild(h); };
+  const item = (label, n, checked, run) => {
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitemradio");
+    b.setAttribute("aria-checked", checked ? "true" : "false");
+    b.innerHTML = `${n ? `<i class="sw" style="background:${spkColor(n)}"></i>` : ""}<span>${esc(label)}</span>`;
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); m.remove(); run(); });
+    m.appendChild(b);
+  };
+  head("This line");
+  for (const n of used) item(spkName(n), n, x.spk === n, () => { x.spk = n; x.spkManual = true; refreshLine(); });
+  item(`New speaker (${spkName(fresh)})`, fresh, false, () => { x.spk = fresh; x.spkManual = true; refreshLine(); });
+  if (x.spk) item("No speaker", null, false, () => { x.spk = null; x.spkManual = true; refreshLine(); });
+  if (x.spk && used.length > 1) {
+    m.appendChild(document.createElement("hr"));
+    head(`Every line of ${spkName(x.spk)}`);
+    const from = x.spk;
+    for (const n of used.filter((n) => n !== from)) {
+      item(`Move to ${spkName(n)}`, n, false, () => {
+        for (const l of lines) if (l.spk === from) { l.spk = n; l.spkManual = true; }
+        refreshAll();
+        toast(`${spkName(from)} merged into ${spkName(n)}.`);
+      });
+    }
+  }
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`;
+  m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  m.querySelector("button")?.focus();
+  m.addEventListener("keydown", (ev) => {
+    const items = [...m.querySelectorAll("button")], i = items.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown") { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (ev.key === "Escape") m.remove();
+  });
 }
 
 // ---- the transcript panel
@@ -1208,7 +1296,7 @@ function renderDoc() {
 }
 
 function chipHtml(n) {
-  return n ? `<button class="spk" style="--c:${spkColor(n)}" title="Change speaker">${esc(spkName(n))}</button>` : "";
+  return n ? `<button class="spk" style="--c:${spkColor(n)}" title="Change speaker (click or right-click)">${esc(spkName(n))}</button>` : "";
 }
 
 function docLine(x, i) {
@@ -1218,13 +1306,11 @@ function docLine(x, i) {
   const chip = x.spk ? chipHtml(x.spk) : speakersInUse().length ? `<button class="spk none" title="Set speaker">?</button>` : "";
   p.innerHTML = `<button class="ts" title="Play from here">${clock(x.s, S.doc.duration)}</button>${chip}<span contenteditable="plaintext-only" spellcheck="true">${esc(x.t)}</span>`;
   p.querySelector(".ts").addEventListener("click", () => seekPlay(x.s));
-  p.querySelector(".spk")?.addEventListener("click", () => {
-    cycleSpeaker(x);
-    p.replaceWith(docLine(x, i));
-    S.doc.dirty = true;
-    renderSpeakerBar();
-    drawLanes();
-  });
+  const refreshLine = () => { p.replaceWith(docLine(x, i)); S.doc.dirty = true; renderSpeakerBar(); drawLanes(); };
+  const refreshAll = () => { S.doc.dirty = true; renderDoc(); drawLanes(); };
+  const menu = (e) => speakerMenu(e, x, S.doc.segs, refreshLine, refreshAll);
+  p.querySelector(".spk")?.addEventListener("click", menu);
+  p.addEventListener("contextmenu", (e) => { if (!e.target.closest("[contenteditable]")) menu(e); });
   const span = p.querySelector("span");
   span.addEventListener("input", () => {
     x.t = span.textContent.replace(/\s+/g, " ").trim();
@@ -1449,12 +1535,122 @@ function tagList() {
     l.startsWith("*") ? { label: l.replace(/^\*\s*/, ""), kind: "marker" } : { label: l, kind: "heading" });
 }
 
+function saveTagList(list) {
+  $("tags").value = list.map((t) => (t.kind === "marker" ? "* " : "") + t.label).join("\n");
+  store.set("tags", $("tags").value);
+  renderTagbar();
+}
+
+// Tags already placed this session follow a renamed or retyped tag button.
+function retag(old, now) {
+  let changed = false;
+  for (const t of S.live.tags) {
+    if (t.label === old.label && t.kind === old.kind) { Object.assign(t, { label: now.label, kind: now.kind }); changed = true; }
+  }
+  if (changed) {
+    S.live.tags.forEach((t) => { t.id = Math.random().toString(36).slice(2); });   // re-render the tag rows
+    renderLiveTranscript();
+    saveDraft();
+  }
+}
+
+function renameTag(i) {
+  const list = tagList(), b = $("tagbar").querySelector(`button[data-i="${i}"]`);
+  if (!b || !list[i]) return;
+  const old = { ...list[i] };
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.value = old.label;
+  inp.className = "tagedit";
+  inp.setAttribute("aria-label", `Rename tag ${i + 1}`);
+  b.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const label = inp.value.trim();
+    if (keep && label && label !== old.label) {
+      list[i] = { ...old, label };
+      saveTagList(list);
+      retag(old, list[i]);
+    } else renderTagbar();
+  };
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  inp.addEventListener("blur", () => finish(true));
+}
+
+function addTagButton() {
+  const list = tagList();
+  if (list.length >= 9) { toast("Up to nine tags have keys; edit the Tags list in Settings for more."); return; }
+  list.push({ label: `Tag ${list.length + 1}`, kind: "heading" });
+  saveTagList(list);
+  renameTag(list.length - 1);
+}
+
+function contextMenu(e, entries) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeMenus();
+  document.querySelector(".menu.ctx")?.remove();
+  const m = document.createElement("div");
+  m.className = "menu ctx";
+  m.setAttribute("role", "menu");
+  for (const it of entries) {
+    if (it === "-") { m.appendChild(document.createElement("hr")); continue; }
+    const b = document.createElement("button");
+    b.setAttribute("role", it.checked != null ? "menuitemradio" : "menuitem");
+    if (it.checked != null) b.setAttribute("aria-checked", it.checked ? "true" : "false");
+    b.innerHTML = `<span>${esc(it.label)}</span>`;
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); m.remove(); it.run(); });
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.min(e.clientX, innerWidth - r.width - 8)}px`;
+  m.style.top = `${Math.min(e.clientY, innerHeight - r.height - 8)}px`;
+  m.querySelector("button")?.focus();
+  m.addEventListener("keydown", (ev) => {
+    const items = [...m.querySelectorAll("button")], k = items.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown") { ev.preventDefault(); items[(k + 1) % items.length].focus(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); items[(k - 1 + items.length) % items.length].focus(); }
+    else if (ev.key === "Escape") m.remove();
+  });
+}
+
 function renderTagbar() {
   const bar = $("tagbar");
   bar.innerHTML = tagList().map((t, i) =>
-    `<button class="${t.kind}" data-i="${i}" title="${t.kind === "marker" ? "Inline marker" : "Heading"} at the current moment"><kbd>${i + 1}</kbd>${esc(t.label)}</button>`).join("") +
+    `<button class="${t.kind}" data-i="${i}" aria-label="${esc(t.label)}, key ${i + 1}" title="${t.kind === "marker" ? "Inline marker" : "Heading"}: click to mark the moment while recording, or to rename it otherwise; right-click for more"><kbd>${i + 1}</kbd>${esc(t.label)}</button>`).join("") +
+    `<button class="addtag" title="Add a tag" aria-label="Add a tag">+</button>` +
     `<input type="text" id="tagtext" placeholder="Type a tag and press Return to mark this moment (start with * for a marker)">`;
-  bar.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => addTag(tagList()[+b.dataset.i])));
+  bar.querySelectorAll("button[data-i]").forEach((b) => {
+    const i = +b.dataset.i;
+    b.addEventListener("click", () => {
+      if (["recording", "paused"].includes(S.live.state)) addTag(tagList()[i]);
+      else renameTag(i);
+    });
+    b.addEventListener("dblclick", (e) => { if (!["recording", "paused"].includes(S.live.state)) e.preventDefault(); });
+    b.addEventListener("contextmenu", (e) => {
+      const list = tagList(), t = list[i];
+      contextMenu(e, [
+        { label: "Rename…", run: () => renameTag(i) },
+        "-",
+        { label: "Heading", checked: t.kind === "heading", run: () => { const old = { ...t }; list[i] = { ...t, kind: "heading" }; saveTagList(list); retag(old, list[i]); } },
+        { label: "Inline marker", checked: t.kind === "marker", run: () => { const old = { ...t }; list[i] = { ...t, kind: "marker" }; saveTagList(list); retag(old, list[i]); } },
+        "-",
+        { label: "Mark this moment", run: () => addTag(t) },
+        { label: "Remove tag button", run: () => { list.splice(i, 1); saveTagList(list); } },
+        { label: "New tag", run: addTagButton },
+      ]);
+    });
+  });
+  bar.querySelector(".addtag").addEventListener("click", addTagButton);
   $("tagtext").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || !e.target.value.trim()) return;
     const v = e.target.value.trim();
@@ -1539,6 +1735,8 @@ async function liveStart() {
     $("lstatus").textContent = "Microphone access was refused. Allow it in the browser's site settings and try again.";
     return;
   }
+  if (S.doc || S.stats) clearResults();
+  S.project = "live";
   Object.assign(L, { state: "recording", buf: new Int16Array(16000 * 600), total: 0, windowStart: 0, busy: false,
                      segs: [], interim: null, tags: [], levels: [], levelPeak: 0, levelCount: 0, resampleFrac: 0,
                      outputs: null, text: {}, started: new Date(), latency: null, model: model(), edits: 0, ready: false });
@@ -1758,7 +1956,11 @@ function segEl(i) {
     ? s.words.map((w) => w.p < 0.5 && /[A-Za-z]{3,}/.test(w.w) ? `<u title="${Math.round(w.p * 100)}% confident">${esc(w.w)}</u>` : esc(w.w)).join("")
     : esc(s.t);
   p.innerHTML = `<time>${hms(s.s)}</time>${chipHtml(s.spk)}<span contenteditable="plaintext-only" spellcheck="true">${words.trim()}</span>`;
-  p.querySelector(".spk")?.addEventListener("click", () => { cycleSpeaker(s); s.rev = (s.rev || 0) + 1; renderLiveTranscript(); });
+  const menu = (e) => speakerMenu(e, s, S.live.segs,
+    () => { s.rev = (s.rev || 0) + 1; renderLiveTranscript(); },
+    () => { S.live.segs.forEach((l) => { l.rev = (l.rev || 0) + 1; }); renderLiveTranscript(); });
+  p.querySelector(".spk")?.addEventListener("click", menu);
+  p.addEventListener("contextmenu", (e) => { if (!e.target.closest("[contenteditable]")) menu(e); });
   const span = p.querySelector("span");
   span.addEventListener("input", () => {
     s.t = span.textContent.replace(/\s+/g, " ").trim();
@@ -1958,12 +2160,26 @@ function offerDraft() {
 
 /* ================================================================ menus, dialogs, shortcuts */
 
-async function newProject() {
+// Close the open results (a file's run, summary, transcript panel and audio) without touching settings.
+function clearResults() {
+  stopSpeaking();
+  $("audio").pause();
+  $("audio").removeAttribute("src");
+  Object.assign(S, { job: null, segments: [], wave: null, pauses: [], speed: [], stats: null, doc: null, names: {}, fresh: [] });
+  S.web.outputs = null;
+  $("studio").classList.add("hidden");
+  $("summary").classList.add("hidden");
+  $("live").innerHTML = "";
+  $("doclines").innerHTML = "";
+}
+
+async function newProject(quiet) {
   const L = S.live;
   if (["recording", "paused"].includes(L.state)) { toast("Stop the live recording first."); return; }
   if (running()) { toast("Cancel the transcription first."); return; }
-  if (S.doc && S.doc.dirty && !confirm("Discard the unsaved corrections?")) return;
-  if (isMac) await api("/api/reset").catch(() => {});
+  if (!quiet && S.doc && S.doc.dirty && !confirm("Discard the unsaved corrections?")) return;
+  S.project = null;
+  if (isMac) api("/api/reset").catch(() => {});
   $("audio").pause();
   $("audio").removeAttribute("src");
   clearTimeout(S.polling);
@@ -1988,8 +2204,8 @@ async function newProject() {
   renderLiveTranscript();
   if (S.mode === "live") liveDefaults();
   window.scrollTo({ top: 0, behavior: "smooth" });
-  if (isMac) poll(true);
-  toast("New project.");
+  if (isMac) setTimeout(() => poll(true), 300);
+  if (!quiet) toast("New project.");
 }
 
 const K = (key) => key;  // shortcut labels as shown
@@ -1997,14 +2213,14 @@ const MENUS = [
   { label: "File", items: [
     { label: "New Project", key: K("⌥⌘N"), run: newProject },
     "-",
-    { label: "Open Recording…", key: K("⌘O"), run: () => { setMode("file"); chooseFile(); } },
-    { label: "Open Path…", key: K("⇧⌘O"), mac: true, run: () => { setMode("file"); $("pastepath").focus(); } },
+    { label: "Open Recording…", key: K("⌘O"), run: () => { if (setMode("file")) chooseFile(); } },
+    { label: "Open Path…", key: K("⇧⌘O"), mac: true, run: () => { if (setMode("file")) $("pastepath").focus(); } },
     { label: "Choose Output Folder…", mac: true, run: pickDir },
     "-",
     { label: "Transcribe", key: K("⌘↩"), run: start, enabled: () => S.mode === "file" && !!S.file && !running() },
     { label: "Cancel Transcription", key: K("⌘."), run: cancel, enabled: running },
     "-",
-    { label: "Start or Pause Live Recording", key: K("⌘R"), run: () => { setMode("live"); liveStart(); } },
+    { label: "Start or Pause Live Recording", key: K("⌘R"), run: () => { if (setMode("live")) liveStart(); } },
     { label: "Stop and Save Live Recording", key: K("⌘S"), run: liveStop, enabled: () => ["recording", "paused"].includes(S.live.state) },
     "-",
     { label: "Open Transcript", mac: true, run: () => openOutput(false), enabled: () => outputsReady() },
@@ -2111,6 +2327,8 @@ function showMenu(mi, focusFirst) {
     else if (e.key === "Escape") { closeMenus(); top.focus(); }
   });
   wrap.appendChild(menu);
+  const over = menu.getBoundingClientRect().right - (document.documentElement.clientWidth - 8);
+  if (over > 0) menu.style.left = `${-over}px`;                     // keep the menu inside the window
   if (focusFirst) menu.querySelector("button:not(:disabled)")?.focus();
 }
 function closeMenus() {
@@ -2151,6 +2369,7 @@ async function showAbout() {
     const dev = S.web.device || await detectDevice();
     rows.push(["Engine", `transformers.js ${TJS_VERSION} in this browser, ${dev === "webgpu" ? "WebGPU" : "WebAssembly"}`],
               ["Models", "Whisper base, small and large-v3-turbo (ONNX, from Hugging Face), cached by the browser after the first download"],
+              ["Privacy", "Recordings and transcripts stay in this browser and are not stored after the page closes. Only the models are downloaded."],
               ["Mac app", S.localAbout ? `running, whisper.cpp ${esc(S.localAbout.whisper || "")}` : "not detected"]);
   }
   $("about-dl").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
@@ -2170,10 +2389,10 @@ function onKey(e) {
   if (mod && e.altKey && (e.code === "KeyN" || k === "n")) { e.preventDefault(); newProject(); return; }
   if (mod && !e.altKey) {
     const map = {
-      o: () => (e.shiftKey && isMac ? ($("pastepath").focus(), setMode("file")) : (setMode("file"), chooseFile())),
+      o: () => { if (!setMode("file")) return; if (e.shiftKey && isMac) $("pastepath").focus(); else chooseFile(); },
       enter: () => S.mode === "file" && start(),
       ".": cancel,
-      r: () => { setMode("live"); liveStart(); },
+      r: () => { if (setMode("live")) liveStart(); },
       s: () => S.mode === "live" && liveStop(),
       "/": () => $("dlg-help").showModal(),
       1: () => setMode("file"),
@@ -2201,10 +2420,15 @@ function onKey(e) {
 
 async function init() {
   document.body.classList.add(isMac ? "engine-mac" : "engine-web");
+  if (!isMac && !["127.0.0.1", "localhost"].includes(location.hostname)) {
+    // remove anything an earlier version of the web page stored
+    for (const k of PRIVATE_KEYS) { try { localStorage.removeItem("transcriber." + k); } catch (e) { /* private mode */ } }
+  }
   applyTheme(store.get("theme") || "system");
   S.version = await fetch("VERSION").then((r) => (r.ok ? r.text() : "")).then((t) => t.trim()).catch(() => "");
+  $("brandver").textContent = S.version ? `v${S.version}` : "";
   buildMenus();
-  document.addEventListener("click", closeMenus);
+  document.addEventListener("click", () => { closeMenus(); document.querySelector(".menu.ctx")?.remove(); });
   document.addEventListener("keydown", onKey);
   document.querySelectorAll("dialog [data-close]").forEach((b) => b.addEventListener("click", () => b.closest("dialog").close()));
   document.querySelectorAll("dialog").forEach((d) => d.addEventListener("click", (e) => { if (e.target === d) d.close(); }));
@@ -2253,7 +2477,7 @@ async function init() {
   document.addEventListener("drop", (e) => {
     const f = e.dataTransfer && e.dataTransfer.files[0];
     if (!f) return;
-    if (S.mode !== "file") setMode("file");
+    if (S.mode !== "file" && !setMode("file")) return;
     droppedFile(f);
   });
   $("wave").addEventListener("mousemove", waveHover);
@@ -2272,7 +2496,10 @@ async function init() {
   $("lstop").addEventListener("click", liveStop);
   $("tab-file").addEventListener("click", () => setMode("file"));
   $("tab-live").addEventListener("click", () => setMode("live"));
-  window.addEventListener("beforeunload", (e) => { if (["recording", "paused"].includes(S.live.state) || running()) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("beforeunload", (e) => {
+    const unsaved = !isMac && (S.web.outputs || S.live.outputs);    // web results exist only in this page
+    if (["recording", "paused"].includes(S.live.state) || running() || unsaved) { e.preventDefault(); e.returnValue = ""; }
+  });
 
   // remembered settings
   for (const id of ["replacements", "language"]) {

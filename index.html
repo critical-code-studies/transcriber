@@ -53,7 +53,7 @@
   --glow: radial-gradient(1200px 380px at 50% -120px, rgba(79,155,255,.12), transparent 70%);
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html, body { margin: 0; background: var(--bg); color: var(--text); max-width: 100%; overflow-x: clip; }
 body {
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
   background-image: var(--glow); background-repeat: no-repeat; min-height: 100vh;
@@ -71,12 +71,13 @@ a { color: var(--accent); }
   box-shadow: 0 1px 0 rgba(255,255,255,.04), 0 6px 20px rgba(5,8,20,.25);
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; letter-spacing: -.01em; font-size: 16px; white-space: nowrap; }
+.brand .ver { font-size: 10.5px; font-weight: 500; color: var(--s-text-3); letter-spacing: 0; margin-left: -4px; align-self: flex-end; margin-bottom: 15px; }
 .brand img { width: 26px; height: 26px; border-radius: 7px; box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
 .menubar { display: flex; gap: 2px; }
 .menubar > div { position: relative; }
 .menubar .top { background: none; border: 0; color: var(--s-text-2); font: inherit; font-size: 13.5px; padding: 5px 10px; border-radius: 6px; cursor: default; }
 .menubar .top:hover, .menubar .top[aria-expanded="true"] { background: rgba(255,255,255,.09); color: var(--s-text); }
-.menu { position: absolute; top: calc(100% + 7px); left: 0; min-width: 270px; padding: 5px; z-index: 60;
+.menu { position: absolute; top: calc(100% + 7px); left: 0; min-width: min(270px, calc(100vw - 16px)); max-width: calc(100vw - 16px); padding: 5px; z-index: 60;
         background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px rgba(5,8,20,.28); }
 .menu button { display: flex; width: 100%; align-items: center; gap: 10px; background: none; border: 0; text-align: left;
                font: inherit; font-size: 13.5px; color: var(--text); padding: 6px 10px 6px 26px; border-radius: 6px; cursor: default; position: relative; }
@@ -86,11 +87,15 @@ a { color: var(--accent); }
 .menu button[aria-checked="true"]::before { content: "✓"; position: absolute; left: 9px; }
 .menu kbd { margin-left: auto; font: inherit; font-size: 12.5px; color: var(--text-3); }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 5px 6px; }
-.modes { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: rgba(255,255,255,.07); }
-.modes button { background: none; border: 0; color: var(--s-text-2); font: inherit; font-size: 12.5px; font-weight: 650; letter-spacing: .08em;
-                padding: 4px 14px; border-radius: 7px; cursor: pointer; }
-.modes button[aria-selected="true"] { background: linear-gradient(100deg, var(--brand-blue), var(--brand-teal)); color: #06101f; }
-.modes button .rd { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--rec); margin-right: 6px; vertical-align: 1px; }
+.modebar { display: flex; justify-content: center; padding: 22px 16px 0; }
+.modes { display: inline-flex; padding: 4px; gap: 4px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.modes button { display: inline-flex; align-items: baseline; gap: 8px; background: none; border: 0; color: var(--text-2); font: inherit; font-size: 14px;
+                font-weight: 700; letter-spacing: .1em; padding: 9px 26px; border-radius: 10px; cursor: pointer; }
+.modes button small { font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--text-3); }
+.modes button:hover:not([aria-selected="true"]) { background: var(--surface-2); }
+.modes button[aria-selected="true"] { background: linear-gradient(100deg, var(--brand-blue), var(--brand-teal)); color: #06101f; box-shadow: 0 4px 14px rgba(47,160,200,.3); }
+.modes button[aria-selected="true"] small { color: rgba(6,16,31,.7); }
+.modes button .rd { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--rec); align-self: center; }
 .engine { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--s-text-2); white-space: nowrap; }
 .pill { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: 99px; background: rgba(255,255,255,.07); }
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-teal); box-shadow: 0 0 8px var(--brand-teal); }
@@ -98,7 +103,8 @@ a { color: var(--accent); }
 .engine button.switch { background: linear-gradient(100deg, var(--brand-blue), var(--brand-teal)); color: #06101f; border: 0;
                         font-weight: 650; font-size: 12.5px; padding: 4px 11px; border-radius: 99px; cursor: pointer; }
 
-main { max-width: 1000px; margin: 0 auto; padding: 26px 16px 70px; display: grid; gap: 18px; }
+main > * { min-width: 0; }
+main { max-width: 1000px; margin: 0 auto; padding: 18px 16px 70px; display: grid; gap: 18px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; box-shadow: var(--shadow); min-width: 0; }
 h2 { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; color: var(--text-2); margin: 0 0 14px; }
 h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-2); font-weight: 600; }
@@ -148,6 +154,8 @@ details[open] summary { margin-bottom: 10px; }
 button { font: inherit; font-size: 14px; border-radius: 9px; padding: 8px 14px; cursor: pointer;
          border: 1px solid var(--border); background: var(--surface-2); color: var(--text); white-space: nowrap; }
 button:hover:not(:disabled) { border-color: var(--text-3); }
+button { max-width: 100%; }
+.actions button, .spkbar button, .files button { white-space: normal; text-align: center; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary { background: linear-gradient(100deg, #2a78d6, #1f9e9a); color: #fff; border: 0; font-weight: 650; padding: 11px 24px; font-size: 15px;
                  box-shadow: 0 6px 18px rgba(42,120,214,.28); }
@@ -230,7 +238,7 @@ canvas.wave { width: 100%; height: 170px; display: block; border-radius: 12px; b
 .rec.on .rd { animation: pulse 1.1s ease-in-out infinite; }
 .rec.paused .rd { border-radius: 2px; background: #ffb4bc; box-shadow: none; }
 .ltimer { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.meter { flex: 1; min-width: 160px; }
+.meter { flex: 1 1 160px; min-width: 0; }
 .meter canvas { width: 100%; height: 22px; display: block; border-radius: 6px; background: rgba(0,0,0,.25); }
 .lstatus { font-size: 12.5px; color: var(--s-text-2); width: 100%; }
 .lstatus b { color: var(--s-text); font-weight: 600; }
@@ -239,7 +247,9 @@ canvas.scope { height: 120px; margin-top: 16px; }
 .studio .tagbar button { font-size: 13px; padding: 5px 11px; border-radius: 99px; }
 .tagbar button kbd { font: inherit; font-size: 11px; color: var(--s-text-3); margin-right: 6px; border: 1px solid var(--s-line); border-radius: 4px; padding: 0 4px; }
 .tagbar button.marker { border-style: dashed; }
-.tagbar input { flex: 1; min-width: 220px; font-size: 13px !important; padding: 6px 10px !important; }
+.studio .tagbar button.addtag { font-size: 15px; padding: 3px 11px; color: var(--s-text-2); }
+.studio .tagbar input.tagedit { flex: 0 0 150px; min-width: 0; padding: 5px 11px !important; border-radius: 99px; }
+.tagbar input { flex: 1 1 220px; min-width: 0; font-size: 13px !important; padding: 6px 10px !important; }
 .ledit { margin-top: 14px; min-height: 220px; max-height: 420px; overflow-y: auto; overflow-x: hidden; border-top: 1px solid var(--s-line); padding-top: 12px; }
 .ledit .empty { color: var(--s-text-3); font-size: 14px; }
 .lseg { margin: 0 0 6px; font-size: 15px; line-height: 1.55; display: flex; gap: 0; }
@@ -311,7 +321,7 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .player button.play { width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 15px; color: #fff; border: 0;
                       background: linear-gradient(120deg, #2a78d6, #1f9e9a); box-shadow: 0 4px 12px rgba(42,120,214,.3); }
 .ptime { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); min-width: 92px; }
-.player canvas { flex: 1; min-width: 160px; height: 36px; border-radius: 6px; cursor: pointer; background: var(--surface); }
+.player canvas { flex: 1 1 160px; min-width: 0; height: 36px; border-radius: 6px; cursor: pointer; background: var(--surface); }
 .player select { width: auto; padding: 5px 8px; font-size: 13px; }
 .spkbar .who select { width: auto; padding: 1px 4px; font-size: 12px; margin-right: 4px; }
 .player .vol { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
@@ -326,6 +336,10 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .dl.now { background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .dl .ts { flex: none; width: 54px; background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; }
 .spk { flex: none; font-size: 11.5px; font-weight: 650; padding: 1px 8px; border-radius: 99px; cursor: pointer; border: 1px solid transparent; color: #fff; background: var(--c, #85837d); white-space: nowrap; }
+.spk { user-select: none; -webkit-user-select: none; }
+.menu.ctx { position: fixed; z-index: 80; min-width: 230px; }
+.menu .hd { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 6px 10px 3px; }
+.menu .sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .spk.none { background: transparent; color: var(--text-3); border-color: var(--border); }
 .dl span[contenteditable] { flex: 1; min-width: 0; outline: none; border-radius: 5px; padding: 0 4px; }
 .dl span[contenteditable]:focus { background: var(--surface-2); box-shadow: 0 0 0 1px var(--accent); }
@@ -364,20 +378,24 @@ footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
 @media (max-width: 560px) {
   .menubar .top { padding: 5px 6px; }
   .brand span, .engine { display: none; }
+  .modes button { padding: 8px 16px; }
+  .modes button small { display: none; }
 }
 </style>
 </head>
 <body class="mode-file">
 <header class="appbar">
-  <div class="brand"><img src="branding/mark.svg" alt=""><span>Transcriber</span></div>
+  <div class="brand"><img src="branding/mark.svg" alt=""><span>Transcriber</span><small id="brandver" class="ver"></small></div>
   <nav class="menubar" id="menubar" role="menubar" aria-label="Main menu"></nav>
-  <div class="modes" role="tablist" aria-label="Mode">
-    <button role="tab" id="tab-file" aria-selected="true">FILE</button>
-    <button role="tab" id="tab-live" aria-selected="false"><span class="rd"></span>LIVE</button>
-  </div>
   <div class="engine" id="engine"></div>
 </header>
 
+<div class="modebar">
+  <div class="modes" role="tablist" aria-label="Mode">
+    <button role="tab" id="tab-file" aria-selected="true">FILE<small>a recording</small></button>
+    <button role="tab" id="tab-live" aria-selected="false"><span class="rd"></span>LIVE<small>as you speak</small></button>
+  </div>
+</div>
 <main>
   <section class="card file-only" id="filecard">
     <h2>Recording</h2>
@@ -478,7 +496,7 @@ footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
       <label class="f full">Find and replace <span class="hint">one per line: wrong =&gt; right (whole words, case-sensitive)</span>
         <textarea id="replacements" rows="3" placeholder="Love Lace => Lovelace"></textarea>
       </label>
-      <label class="f full live-only">Tags <span class="hint">one per line; press 1–9 while recording to mark the moment. Tags become headings; start a line with * for an inline marker instead.</span>
+      <label class="f full live-only">Tags <span class="hint">one per line; press 1–9 while recording to mark the moment. Tags become headings; start a line with * for an inline marker instead. You can also click a tag button to rename it, or right-click it.</span>
         <textarea id="tags" rows="4"></textarea>
       </label>
       <details class="full file-only">
@@ -561,7 +579,7 @@ footer { text-align: center; color: var(--text-3); font-size: 12.5px; }
       </div>
       <div class="spkbar" id="spkbar"></div>
       <div class="doc" id="doclines"></div>
-      <p class="small muted" style="margin:8px 0 0">Click a time to play from there, a speaker chip to change who is speaking, or the text to correct it. <b>Space</b> plays and pauses when you're not typing.</p>
+      <p class="small muted" style="margin:8px 0 0">Click a time to play from there, a speaker chip (or right-click a line) to set who is speaking or merge two speakers, or the text to correct it. <b>Space</b> plays and pauses when you're not typing.</p>
     </div>
 
     <div class="section">

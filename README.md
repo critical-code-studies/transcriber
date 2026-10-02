@@ -3,7 +3,7 @@
 Transcriber turns recordings and live speech into Markdown, subtitles (.srt) and plain text with OpenAI's Whisper speech-recognition models. It runs in two places from one page:
 
 - **On a Mac**, as a small local app using [whisper.cpp](https://github.com/ggml-org/whisper.cpp) with Metal: about 20× faster than real time with the large-v3-turbo model, and the files are saved beside the recording.
-- **In the browser**, at **<https://critical-code-studies.github.io/transcriber/>**, using [transformers.js](https://github.com/huggingface/transformers.js) on WebGPU. Nothing is uploaded: the model is downloaded once and cached, the audio stays in the browser, and the files are downloaded at the end. When the web page finds the Mac app running, it offers to switch to it.
+- **In the browser**, at **<https://critical-code-studies.github.io/transcriber/>**, using [transformers.js](https://github.com/huggingface/transformers.js) on WebGPU. Nothing is uploaded: the models are downloaded once and cached, the audio stays in the browser, and the files are downloaded at the end. The web version keeps nothing from a transcription after the page is closed or reloaded (no drafts, find/replace lists, tag or speaker names); it remembers only display preferences such as theme, model, language and volume. When the web page finds the Mac app running, it offers to switch to it.
 
 <p align="center"><img src="branding/screenshot-file.png" alt="Transcribing a recording: progress ring, waveform filling in, speed, words per minute and emerging terms" width="88%"></p>
 
@@ -28,8 +28,8 @@ Set the player to **Read aloud** to hear the transcript spoken by the browser's 
 Press **Start recording** (⌘R) and allow the microphone. Text appears a few seconds behind speech. Grey italic text is provisional; it is committed at a pause, as whole sentences.
 
 - Click any line to correct it while recording continues. Words the model was unsure of are underlined.
-- Press **1–9** (outside a text field), click a tag, or type one and press Return to mark the current moment. Tags become headings in the Markdown; a tag starting with `*` becomes an inline marker instead.
-- **Stop and save** (⌘S) writes the .md, .srt and .txt and, if chosen, the audio as .wav. Committed lines and tags are also kept in the browser while recording, so a closed tab can be recovered as text.
+- Press **1–9** (outside a text field), click a tag, or type one and press Return to mark the current moment. When not recording, click a tag button to rename it (for example to a speaker's name); right-click it to switch between heading and marker, remove it, or add another. Tags become headings in the Markdown; a tag starting with `*` becomes an inline marker instead.
+- **Stop and save** (⌘S) writes the .md, .srt and .txt and, if chosen, the audio as .wav. In the Mac app, committed lines and tags are also kept in the browser while recording, so a closed tab can be recovered as text; the web version does not keep them.
 
 <p align="center"><img src="branding/screenshot-live.png" alt="Live transcription with tags, a corrected line and provisional text" width="88%"></p>
 
@@ -41,7 +41,7 @@ With *Speakers* set to *Detect automatically* (or a fixed number), each segment'
 **[0:00:42]** [Speaker 2] Thank you. I want to pick up the story with Note G…
 ```
 
-In LIVE mode each new line is matched against the voices heard so far, and the whole session is regrouped when recording stops. Speakers can be renamed in the Transcript panel, and any line's speaker chip can be clicked to reassign it. Attributions are automatic and should be checked.
+In LIVE mode each new line is matched against the voices heard so far, and the whole session is regrouped when recording stops; regrouping keeps each speaker's number and name on the voice it had. Speakers can be renamed in the Transcript panel. Click or right-click a line's speaker chip (or right-click the line) to set its speaker, start a new one, or move every line of that speaker to another, which merges two speakers that are really one. Attributions are automatic and should be checked.
 
 ## Output
 
@@ -52,6 +52,8 @@ The Markdown has a title; a source line with the duration and any file metadata 
 *Section headings* (FILE mode) take one `time heading` per line, such as `12:30 First speaker`; each heading goes before the sentence starting nearest that time. *Find and replace* takes one `wrong => right` per line and matches whole words, case-sensitively.
 
 ## Menus and shortcuts
+
+The page holds one project at a time: a recording or a live session. Switching between FILE and LIVE with something open asks first, and **File › New Project** (⌥⌘N) clears the page; files already written are kept.
 
 **File** (New Project ⌥⌘N, open, transcribe, live recording, open or download the files), **Edit** (copy the transcript, apply corrections, clear fields), **View** (FILE or LIVE ⌘1/⌘2, appearance, technical log, switch engine) and **Help** (how to use it, shortcuts, source, About). Space plays and pauses the recording when you are not typing.
 
